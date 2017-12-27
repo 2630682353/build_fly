@@ -3,8 +3,8 @@ CFLAGS= -Wall -Os
 SRCS=$(wildcard *.c)
 OBJS=$(SRCS:.c=.o)
 
-gateway_proxy: gateway_proxy.o
-	$(CC) $(LDFLAGS) $(CFLAGS) gateway_proxy.o -L. -lipc -lpthread -o gateway_proxy 
+gateway_proxy: $(OBJS)
+	$(CC) $(LDFLAGS) $(CFLAGS) $(OBJS) -o gateway_proxy -lipc -lshare
 
 %.o: %.c
 	$(CC) -c -o $@ $< $(CFLAGS)

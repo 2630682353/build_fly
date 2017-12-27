@@ -5,10 +5,10 @@ OBJS=$(SRCS:.c=.o)
 
 all:radius_client radacct
 radacct: radacct.o
-	$(CC) $(LDFLAGS) $(CFLAGS) radacct.o libfreeradius-client.a -o radacct 
+	$(CC) $(LDFLAGS) $(CFLAGS) radacct.o -lfreeradius-client -o radacct 
 
-radius_client: radius_client.o log.o
-	$(CC) $(LDFLAGS) $(CFLAGS) radius_client.o log.o libfreeradius-client.a -L. -lipc -lpthread -o radius_client 
+radius_client: radius_client.o 
+	$(CC) $(LDFLAGS) $(CFLAGS) radius_client.o -lfreeradius-client -lipc -lshare -o radius_client 
 
 %.o: %.c
 	$(CC) -c -o $@ $< $(CFLAGS)

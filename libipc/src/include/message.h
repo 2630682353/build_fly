@@ -17,70 +17,70 @@ enum module_type {
 };
 
 enum module_mid {
-	MODULE_GATEWAY = 1,
-	MODULE_DPI,
-	MODULE_WS,
-	MODULE_RADIUS,
-	MODULE_GATEWAY_KERNEL,
-	MODULE_DPI_KERNEL,
-	MODULE_WS_KERNEL,
-	MODULE_RADIUS_KERNEL,
-	MODULE_MAX			//must be end
+	MODULE_MANAGE   = 1,    /*GATEWAY-MANAGE MODULE*/
+	MODULE_DPI,             /*DPI MODULE*/
+	MODULE_WS,              /*WEB SERVICE MODULE*/
+	MODULE_RADIUS,          /*RADIUS-CLIENT MODULE*/
+	MODULE_AS,              /*ACCESS-SERVICE MODULE*/
+	MODULE_MAX              /*must be end*/
 };
 
-enum {
-	GATEWAY_QUERY = DEFINE_CMD(MODULE_GATEWAY, USER_MODULE, 1),
-	GATEWAY_TEST2,
-	GATEWAY_TEST3
-	};
-	
-enum {
-	WS_TEST1 = DEFINE_CMD(MODULE_WS, USER_MODULE, 1),
-	WS_TEST2
-	};
-
-enum {
-	RADIUS_AUTH = DEFINE_CMD(MODULE_RADIUS, USER_MODULE, 1),
-	};
-
-enum {
-	DPI_TEST1 = DEFINE_CMD(MODULE_DPI, USER_MODULE, 1),
-	DPI_TEST2,
-	DPI_TEST3
-	};
-
-
-enum {
-	GATEWAY_KERNEL_TEST1 = DEFINE_CMD(MODULE_GATEWAY_KERNEL, KERNEL_MODULE, 1),
-	GATEWAY_KERNEL_TEST2,
-	GATEWAY_KERNEL_TEST3
-	};
-
-enum {
-	DPI_KERNEL_TEST1 = DEFINE_CMD(MODULE_DPI_KERNEL, KERNEL_MODULE, 1),
-	DPI_KERNEL_TEST2,
-	DPI_KERNEL_TEST3
-	};
-
-enum {
-	WS_KERNEL_TEST1 = DEFINE_CMD(MODULE_WS_KERNEL, KERNEL_MODULE, 1),
-	};
-
-enum {
-	RADIUS_KERNEL_TEST1 = DEFINE_CMD(MODULE_RADIUS_KERNEL, KERNEL_MODULE, 1),
-	};
+enum msg_cmd_en {
+    /*manage module*/
+    MSG_CMD_MANAGE_START                = DEFINE_CMD(MODULE_MANAGE, USER_MODULE, 1),
+    MSG_CMD_MANAGE_HEARTBEAT            = MSG_CMD_MANAGE_START,
+    MSG_CMD_MANAGE_USER_QUERY           = MSG_CMD_MANAGE_START+1,
+    
+    /*web server module*/
+    MSG_CMD_WS_START                    = DEFINE_CMD(MODULE_WS, USER_MODULE, 1),
+    
+    /*dpi module*/
+    MSG_CMD_DPI_START                   = DEFINE_CMD(MODULE_DPI, USER_MODULE, 1),
+    
+    /*AAA module*/
+    MSG_CMD_RADIUS_START                = DEFINE_CMD(MODULE_RADIUS, USER_MODULE, 1),
+    MSG_CMD_RADIUS_AUTH_TIMEOUT         = MSG_CMD_RADIUS_START + 0, /*kernel --> app, Time out & Flow out*/
+    MSG_CMD_RADIUS_USER_AUTH			= MSG_CMD_RADIUS_START + 1, 
+    
+    /*access service module*/
+    MSG_CMD_AS_START                    = DEFINE_CMD(MODULE_AS, KERNEL_MODULE, 1),
+    MSG_CMD_AS_AUTHENTICATED_ADD        = MSG_CMD_AS_START + 0, /*app --> kernel*/
+    MSG_CMD_AS_AUTHENTICATED_DELETE     = MSG_CMD_AS_START + 1, /*app --> kernel*/
+    MSG_CMD_AS_AUTHENTICATED_QUERY      = MSG_CMD_AS_START + 2, /*app --> kernel*/
+    MSG_CMD_AS_BLACKLIST_ADD            = MSG_CMD_AS_START + 3, /*app --> kernel*/
+    MSG_CMD_AS_BLACKLIST_DELETE         = MSG_CMD_AS_START + 4, /*app --> kernel*/
+    MSG_CMD_AS_BLACKLIST_QUERY          = MSG_CMD_AS_START + 5, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_ADD          = MSG_CMD_AS_START + 6, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_DELETE       = MSG_CMD_AS_START + 7, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_QUERY        = MSG_CMD_AS_START + 8, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_POLICY_SET   = MSG_CMD_AS_START + 9, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_POLICY_QUERY = MSG_CMD_AS_START + 10,/*app --> kernel*/
+    MSG_CMD_AS_PORTAL_URL_SET           = MSG_CMD_AS_START + 11,/*app --> kernel*/
+    MSG_CMD_AS_PORTAL_URL_QUERY         = MSG_CMD_AS_START + 12,/*app --> kernel*/
+    MSG_CMD_AS_INNER_INTERFACE_SET      = MSG_CMD_AS_START + 13,/*app --> kernel*/
+    MSG_CMD_AS_INNER_INTERFACE_QUERY    = MSG_CMD_AS_START + 14,/*app --> kernel*/
+    MSG_CMD_AS_OUTER_INTERFACE_SET      = MSG_CMD_AS_START + 15,/*app --> kernel*/
+    MSG_CMD_AS_OUTER_INTERFACE_QUERY    = MSG_CMD_AS_START + 16,/*app --> kernel*/
+    MSG_CMD_AS_END                      = MSG_CMD_AS_START + 17,
+};
 
 
 #define NETLINK_EVENT     30
 #define NETLINK_UMSG     31
 
 enum error_code {
-	ERR_CODE_NONECMD = 1,
+    SUCCESS             = 0,
+	ERR_CODE_NONECMD    = 1,
 	ERR_CODE_INPUT,
 	ERR_CODE_FILE,
 	ERR_CODE_MALLOC,
 	ERR_CODE_AUTHFAIL,
-	ERR_CODE_QUERYNONE
+	ERR_CODE_QUERYNONE,
+	ERR_CODE_PARAMETER,
+	ERR_CODE_UNSUPPORTED,
+	ERR_CODE_OPERATE_ADD,
+	ERR_CODE_OPERATE_DELETE,
+	ERR_CODE_OPERATE_QUERY,
 };
 
 typedef int32 (*msg_cmd_handle_cb)(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen);
@@ -98,15 +98,15 @@ typedef struct msg_st{
 }msg_t;
 
 /*参数:模块id，线程数，域套接字接收地址，域套接字发送地址*/
-extern int32 msg_init(const int16 module_id, const int32 thd_num, char *rcv_path, char *snd_path); 
-extern int32 msg_cmd_register(const int32 cmd, msg_cmd_handle_cb cb);
-extern int32 msg_cmd_unregister(const int32 cmd);
-
-extern int32 msg_dst_module_register_unix(const int32 mid, char *path);
+extern int32 msg_init(const int16 module_id); 
+extern int32 msg_dst_module_register_unix(const int32 mid);
 extern int32 msg_dst_module_register_netlink(const int32 mid);
-
 extern int32 msg_dst_module_unregister(const int32 mid);
 extern void msg_final(void);
+
+//kernel module的函数
+extern int32 msg_cmd_register(const int32 cmd, msg_cmd_handle_cb cb);
+extern int32 msg_cmd_unregister(const int32 cmd);
 extern int32 msg_send_syn(int32 cmd, void *sbuf, int32 slen, void **rbuf, int32 *rlen);
 extern int32 free_rcv_buf(void *rcv_buf);
 

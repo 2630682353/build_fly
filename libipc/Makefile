@@ -15,6 +15,7 @@ define Package/libipc
   SECTION:=libs
   CATEGORY:=Libraries
   TITLE:=libipc
+  DEPENDS=+libshare
 endef
 
 TARGET_CFLAGS += $(FPIC)

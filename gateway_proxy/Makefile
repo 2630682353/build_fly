@@ -38,7 +38,7 @@ define Package/gateway_proxy
 	SECTION:=net
 	CATEGORY:=Network
 	TITLE:=gateway_proxy -- prints a snarky message
-	DEPENDS+=+libipc +libpthread
+	DEPENDS+=+libipc
 endef
 
 

@@ -38,7 +38,7 @@ define Package/AAA_client
 	SECTION:=net
 	CATEGORY:=Network
 	TITLE:=AAA_client -- prints a snarky message
-	DEPENDS+=+libipc +libpthread
+	DEPENDS+=+libipc +libfreeradius-client
 endef
 
 

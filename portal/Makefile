@@ -10,7 +10,7 @@ define Package/portal
   SECTION:=base
   CATEGORY:=Network
   TITLE:=portal
-  DEPENDS=+libipc
+  DEPENDS=+libipc +libshare
 endef
 
 define Package/portal/description
@@ -29,11 +29,10 @@ endef
 
 define Package/portal/install
 	$(INSTALL_DIR) $(1)/www/portal
-	$(INSTALL_DIR) $(1)/www/portal/cgi-bin
+	$(INSTALL_DIR) $(1)/www/cgi-bin
 	
-	$(CP) ./html/images $(1)/www/portal
-	$(CP) ./html/index.html $(1)/www/portal
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/portal_cgi $(1)/www/portal/cgi-bin
+	$(CP) ./html/* $(1)/www/portal
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/portal_cgi $(1)/www/cgi-bin
 endef
 
 $(eval $(call BuildPackage,portal))

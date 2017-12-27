@@ -20,6 +20,7 @@
 #define PKT_POOL_INITNUM 10
 #define PKT_POOL_GROWNUM 8
 #define RECV_FROM_TIMEOUT 3
+#define THREAD_NUM  3
 
 static int16 s_module_id = 0;
 static int16 msg_sn = 0;
@@ -97,10 +98,8 @@ static msg_module_cmd_t *msg_get_cmdfunc(const int32 cmd);
 
 
 
-int32 msg_init(const int16 module_id,   /*本模块的模块ID*/
-               const int32 thd_num,     /*为服务端创建的业务线程数*/
-        		char *rcv_path,        /*本模块的收包地址信息*/
-        		char *snd_path)		/*本模块的发包地址信息*/	
+int32 msg_init(const int16 module_id  /*本模块的模块ID*/
+						)		
 {
     /*1. 初始化收/发包队列*/
     /*2. 创建收包线程*/
@@ -109,6 +108,8 @@ int32 msg_init(const int16 module_id,   /*本模块的模块ID*/
     /*5. 初始化收包socket*/
     /*6. 初始化发包socket*/
 
+	char rcv_path[20] = {0};
+	char snd_path[20] = {0};
 	s_module_id = module_id;
 	msg_sn = 0;
 	pthread_mutex_init(&sn_mutex, NULL);
@@ -123,8 +124,11 @@ int32 msg_init(const int16 module_id,   /*本模块的模块ID*/
 	pthread_mutex_init(&sp_snd_queue->mutex, NULL);
 	queue_init(sp_snd_queue);
 	
-	sp_handle_pool = thread_pool_create(thd_num);
+	sp_handle_pool = thread_pool_create(THREAD_NUM);
 	DB_INF("after init thread_pool");
+
+	snprintf(rcv_path, sizeof(rcv_path) - 1, "/tmp/%d_rcv", module_id);
+	snprintf(snd_path, sizeof(snd_path) - 1, "/tmp/%d_snd", module_id);
 	sp_rcv_sock = unix_sock_init(rcv_path);
 	sp_snd_sock = unix_sock_init(snd_path);
 	
@@ -183,7 +187,7 @@ void msg_final(void)
         free(item->arg);
         free(item);
     }
-	pthread_mutex_destroy (&sp_rcv_queue->mutex);
+	pthread_mutex_destroy(&sp_rcv_queue->mutex);
 	free(sp_rcv_queue);
 	
 	queue_destroy(sp_snd_queue);
@@ -196,7 +200,7 @@ void msg_final(void)
         free(item->arg);
         free(item);
     }
-	pthread_mutex_destroy (&sp_snd_queue->mutex);
+	pthread_mutex_destroy(&sp_snd_queue->mutex);
 	free(sp_snd_queue);
 	memory_pool_destroy(mempool_buf);
 	memory_pool_destroy(mempool_queue_item);
@@ -298,7 +302,8 @@ int32 msg_send_syn(
 	DB_INF("cli have recv %s, len:%d, len2:%d,cmd:%d,res:%d", rcv_msg->data, len, sizeof(msg_t) + rcv_msg->dlen,
 									rcv_msg->cmd, rcv_msg->result);
 	ret = rcv_msg->result;
-	if (rcv_msg->cmd == snd_msg->cmd && rcv_msg->result == 0) {
+	if (rcv_msg->cmd == snd_msg->cmd && rcv_msg->result == 0 
+		&& rbuf != NULL && rlen != NULL && rcv_msg->dlen != 0) {
 		*rbuf = rcv_msg->data;
 		*rlen = rcv_msg->dlen;
 	}
@@ -310,10 +315,13 @@ out:
 		mem_free(snd_msg);
 	if (temp_sock) 
 		sock_delete(temp_sock);
-	if (ret != 0) {
-		mem_free(rcv_buf);
-		*rbuf = NULL;
-		*rlen = 0;
+	if (ret != 0 || rbuf == NULL || rlen == NULL || (rcv_msg && rcv_msg->dlen == 0)) {
+		if (rcv_buf)
+			mem_free(rcv_buf);
+		if (rbuf)
+			*rbuf = NULL;
+		if (rlen)
+			*rlen = 0;
 	}
 	return ret;
 	
@@ -575,16 +583,14 @@ int32 msg_cmd_unregister_all(void)
 }
 
 /*消息通信对端模块信息注册*/
-int32 msg_dst_module_register_unix(const int32 mid,          /*对端模块ID*/
-								char *path)  /*对端模块地址信息*/
+int32 msg_dst_module_register_unix(const int32 mid           /*对端模块ID*/
+								) 
 {
 	msg_module_t *msg_module = (msg_module_t *)malloc(sizeof(msg_module_t));
 	msg_module->mid = mid;
-	
 	msg_module->addr.un_addr.sun_family = AF_UNIX;
 	memset(msg_module->addr.un_addr.sun_path, 0, sizeof(msg_module->addr.un_addr.sun_path));
-	strncpy(msg_module->addr.un_addr.sun_path, path, sizeof(msg_module->addr.un_addr.sun_path)-1);
-	
+	snprintf(msg_module->addr.un_addr.sun_path, sizeof(msg_module->addr.un_addr.sun_path)-1, "/tmp/%d_rcv", mid);
 	INIT_LIST_HEAD(&msg_module->cmd_list);
 	list_add(&(msg_module->list), &s_dst_modules);
 	return 0;

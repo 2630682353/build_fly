@@ -8,6 +8,7 @@
 #include "message.h"
 #include "sock.h"
 #include "log.h"
+#include "tools.h"
 #include "protocol.h"
 #include "connection.h"
 #include <sys/stat.h>
@@ -23,6 +24,7 @@ typedef struct user_info
 	char name[20];		//字符串
 	char pwd[20];		//字符串
 	unsigned char mac[6];
+	uint32 ipaddr;
 }user_info_t;
 
 typedef struct user_tel_info
@@ -31,49 +33,6 @@ typedef struct user_tel_info
 	char pwd[20];
 	unsigned char mac[6];
 }user_tel_info_t;
-
-char *cgi_mac2str(uint8_t *mac)
-{
-	char *str = malloc(20);
-	memset(str, 0, 20);
-	snprintf(str, 20, "%02X:%02X:%02X:%02X:%02X:%02X",
-		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-	return str;
-}
-
-int cgi_str2mac(char *str, unsigned char *mac)
-{
-	int i = 0, j = 0;
-	unsigned char v = 0;
-
-	for (i = 0; i < 17; i++) {
-		if (str[i] >= '0' && str[i] <= '9') {
-			v = str[i] - '0';
-		} else if (str[i] >= 'a' && str[i] <= 'f') {
-			v = str[i] - 'a' + 10;
-		} else if (str[i] >= 'A' && str[i] <= 'F') {
-			v = str[i] - 'A' + 10;
-		} else if (str[i] == ':' || str[i] == '-' ||
-					str[i] == ',' || str[i] == '\r' ||
-					str[i] == '\n') {
-			continue;
-		} else if (str[i] == '\0') {
-			return 0;
-		} else {
-			return -1;
-		}
-		if (j%2)
-			mac[j/2] += v;
-		else
-			mac[j/2] = v*16;
-		j++;
-		if (j/2 > 5)
-			break;
-	}
-	return 0;
-}
-
 
 enum {
 	CGI_ERR_FAIL = 10001,
@@ -101,8 +60,8 @@ int auth_handle(user_info_t *user)
 	strcpy(file_temp, "/tmp/test.XXXXXX");
 	snd_msg = malloc(sizeof(msg_t));
 	
-	snd_msg->cmd = RADIUS_AUTH;
-	snd_msg->dmid = MODULE_GET(RADIUS_AUTH);
+	snd_msg->cmd = MSG_CMD_RADIUS_USER_AUTH;
+	snd_msg->dmid = MODULE_GET(MSG_CMD_RADIUS_USER_AUTH);
 	snd_msg->dlen = sizeof(user_info_t);
 	if ((temp_fd = mkstemp(file_temp)) < 0) {
 		CGI_LOG("mktemp error");
@@ -113,7 +72,7 @@ int auth_handle(user_info_t *user)
 	sock_addr_u dst_addr;
 	dst_addr.un_addr.sun_family = AF_UNIX;
 	memset(dst_addr.un_addr.sun_path, 0, sizeof(dst_addr.un_addr.sun_path));
-	strncpy(dst_addr.un_addr.sun_path, "/tmp/radius_rcv", sizeof(dst_addr.un_addr.sun_path)-1);
+	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
 	if (!temp_sock)
 		goto out;
 	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_info_t), &dst_addr);
@@ -151,8 +110,8 @@ int query_handle(char *mac, user_tel_info_t *user)
 	strcpy(file_temp, "/tmp/test.XXXXXX");
 	snd_msg = malloc(sizeof(msg_t));
 	
-	snd_msg->cmd = GATEWAY_QUERY;
-	snd_msg->dmid = MODULE_GET(GATEWAY_QUERY);
+	snd_msg->cmd = MSG_CMD_MANAGE_USER_QUERY;
+	snd_msg->dmid = MODULE_GET(MSG_CMD_MANAGE_USER_QUERY);
 	snd_msg->dlen = sizeof(user_info_t);
 	if ((temp_fd = mkstemp(file_temp)) < 0) {
 		CGI_LOG("mktemp error");
@@ -163,7 +122,7 @@ int query_handle(char *mac, user_tel_info_t *user)
 	sock_addr_u dst_addr;
 	dst_addr.un_addr.sun_family = AF_UNIX;
 	memset(dst_addr.un_addr.sun_path, 0, sizeof(dst_addr.un_addr.sun_path));
-	strncpy(dst_addr.un_addr.sun_path, "/tmp/gateway_rcv", sizeof(dst_addr.un_addr.sun_path)-1);
+	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
 	if (!temp_sock)
 		goto out;
 	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), mac, strlen(mac) + 1, &dst_addr);
@@ -200,23 +159,47 @@ int cgi_sys_auth_handler(connection_t *con)
 	CGI_LOG("name: %s, pwd: %s, msc: %s\n", name, pwd, mac);
 	user_info_t user= {{0}, {0}, {0}};
 	if (!name || !pwd || !mac) {
-		con->html_path = "error.html";
+		con->html_path = "portal/error.html";
 		html_tag_add(&con->tag_list, "zc:error", "error_input");
 		goto out;
 	}
 		
 	strncpy(user.name, name, sizeof(user.name) - 1);
 	strncpy(user.pwd, pwd, sizeof(user.pwd) - 1);
-	cgi_str2mac(mac, user.mac);
+	str2mac(mac, user.mac);
 	if (auth_handle(&user) == 0) {
-		con->html_path = "auth_success.html";
+		con->html_path = "portal/auth_success.html";
 	} else {
-		con->html_path = "auth_fail.html";
+		con->html_path = "portal/auth_fail.html";
 	}
 	
 out:
 	return 0;
 	
+}
+
+int cgi_sys_login_handler(connection_t *con)
+{
+	char *mac = con_value_get(con,"mac");
+	char *ip = con_value_get(con,"ip");
+	CGI_LOG("mac: %s\n", mac);
+	user_info_t user= {{0}, {0}, {0}, 0};
+	struct in_addr user_ip;
+	user_ip.s_addr = inet_addr(ip);
+	
+	strncpy(user.name, "18202822785", sizeof(user.name) - 1);
+	strncpy(user.pwd, "1231245", sizeof(user.pwd) - 1);
+	str2mac(mac, user.mac);
+	user.ipaddr = user_ip.s_addr;
+	
+	if (auth_handle(&user) == 0) {
+		con->html_path = "portal/auth_success.html";
+	} else {
+		con->html_path = "portal/auth_fail.html";
+	}
+	
+out:
+	return 0;	
 }
 
 int cgi_sys_query_handler(connection_t *con)
@@ -227,21 +210,21 @@ int cgi_sys_query_handler(connection_t *con)
 	user_tel_info_t user;
 	memset(&user, 0, sizeof(user_tel_info_t));
 	if (!mac) {
-		con->html_path = "error.html";
+		con->html_path = "portal/error.html";
 		html_tag_add(&con->tag_list, "zc:error", "error_input");
 		goto out;
 	}
 	
 	if (query_handle(mac, &user) == 0) {
-  		con->html_path = "query_ok.html";
-		char *r_mac = cgi_mac2str(user.mac);
+  		con->html_path = "portal/query_ok.html";
+		char *r_mac = mac2str(user.mac);
 		html_tag_add(&con->tag_list, "zc:tel", user.tel);
 		html_tag_add(&con->tag_list, "zc:pwd", user.pwd);
 		html_tag_add(&con->tag_list, "zc:mac", r_mac);
 		CGI_LOG("tel: %s, pwd: %s, mac: %s\n", user.tel, user.pwd, r_mac);
 		free(r_mac);
 	} else {
-		con->html_path = "index.html";
+		con->html_path = "portal/index.html";
 		html_tag_add(&con->tag_list, "zc:mac", mac);
 	}
 	
