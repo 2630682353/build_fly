@@ -24,7 +24,6 @@ typedef struct user_info
 	char name[20];		//字符串
 	char pwd[20];		//字符串
 	unsigned char mac[6];
-	uint32 ipaddr;
 }user_info_t;
 
 typedef struct user_tel_info
@@ -159,7 +158,7 @@ int cgi_sys_auth_handler(connection_t *con)
 	CGI_LOG("name: %s, pwd: %s, msc: %s\n", name, pwd, mac);
 	user_info_t user= {{0}, {0}, {0}};
 	if (!name || !pwd || !mac) {
-		con->html_path = "portal/error.html";
+		con->html_path = "error.html";
 		html_tag_add(&con->tag_list, "zc:error", "error_input");
 		goto out;
 	}
@@ -168,38 +167,14 @@ int cgi_sys_auth_handler(connection_t *con)
 	strncpy(user.pwd, pwd, sizeof(user.pwd) - 1);
 	str2mac(mac, user.mac);
 	if (auth_handle(&user) == 0) {
-		con->html_path = "portal/auth_success.html";
+		con->html_path = "auth_success.html";
 	} else {
-		con->html_path = "portal/auth_fail.html";
+		con->html_path = "auth_fail.html";
 	}
 	
 out:
 	return 0;
 	
-}
-
-int cgi_sys_login_handler(connection_t *con)
-{
-	char *mac = con_value_get(con,"mac");
-	char *ip = con_value_get(con,"ip");
-	CGI_LOG("mac: %s\n", mac);
-	user_info_t user= {{0}, {0}, {0}, 0};
-	struct in_addr user_ip;
-	user_ip.s_addr = inet_addr(ip);
-	
-	strncpy(user.name, "18202822785", sizeof(user.name) - 1);
-	strncpy(user.pwd, "1231245", sizeof(user.pwd) - 1);
-	str2mac(mac, user.mac);
-	user.ipaddr = user_ip.s_addr;
-	
-	if (auth_handle(&user) == 0) {
-		con->html_path = "portal/auth_success.html";
-	} else {
-		con->html_path = "portal/auth_fail.html";
-	}
-	
-out:
-	return 0;	
 }
 
 int cgi_sys_query_handler(connection_t *con)
@@ -210,13 +185,13 @@ int cgi_sys_query_handler(connection_t *con)
 	user_tel_info_t user;
 	memset(&user, 0, sizeof(user_tel_info_t));
 	if (!mac) {
-		con->html_path = "portal/error.html";
+		con->html_path = "error.html";
 		html_tag_add(&con->tag_list, "zc:error", "error_input");
 		goto out;
 	}
 	
 	if (query_handle(mac, &user) == 0) {
-  		con->html_path = "portal/query_ok.html";
+  		con->html_path = "query_ok.html";
 		char *r_mac = mac2str(user.mac);
 		html_tag_add(&con->tag_list, "zc:tel", user.tel);
 		html_tag_add(&con->tag_list, "zc:pwd", user.pwd);
@@ -224,7 +199,7 @@ int cgi_sys_query_handler(connection_t *con)
 		CGI_LOG("tel: %s, pwd: %s, mac: %s\n", user.tel, user.pwd, r_mac);
 		free(r_mac);
 	} else {
-		con->html_path = "portal/index.html";
+		con->html_path = "index.html";
 		html_tag_add(&con->tag_list, "zc:mac", mac);
 	}
 	
