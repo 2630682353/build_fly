@@ -3,15 +3,18 @@
 
 #define PRO_SYS_QUERY  "query"
 #define PRO_SYS_AUTH  "auth"
+#define PRO_SYS_LOGIN  "login"
 
 
 extern int cgi_sys_query_handler(connection_t *con);   //用户查询
 extern int cgi_sys_auth_handler(connection_t *con);				//用户认证
+extern int cgi_sys_login_handler(connection_t *con);
 
 
 static cgi_protocol_t pro_list[] ={
 	{PRO_SYS_QUERY, cgi_sys_query_handler},
 	{PRO_SYS_AUTH,cgi_sys_auth_handler},
+	{PRO_SYS_LOGIN,cgi_sys_login_handler},
 	{NULL,NULL},
 };
 

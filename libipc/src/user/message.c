@@ -127,8 +127,8 @@ int32 msg_init(const int16 module_id  /*本模块的模块ID*/
 	sp_handle_pool = thread_pool_create(THREAD_NUM);
 	DB_INF("after init thread_pool");
 
-	snprintf(rcv_path, sizeof(rcv_path - 1), "/tmp/%d_rcv", module_id);
-	snprintf(snd_path, sizeof(snd_path - 1), "/tmp/%d_snd", module_id);
+	snprintf(rcv_path, sizeof(rcv_path) - 1, "/tmp/%d_rcv", module_id);
+	snprintf(snd_path, sizeof(snd_path) - 1, "/tmp/%d_snd", module_id);
 	sp_rcv_sock = unix_sock_init(rcv_path);
 	sp_snd_sock = unix_sock_init(snd_path);
 	
@@ -187,7 +187,7 @@ void msg_final(void)
         free(item->arg);
         free(item);
     }
-	pthread_mutex_destroy (&sp_rcv_queue->mutex);
+	pthread_mutex_destroy(&sp_rcv_queue->mutex);
 	free(sp_rcv_queue);
 	
 	queue_destroy(sp_snd_queue);
@@ -200,7 +200,7 @@ void msg_final(void)
         free(item->arg);
         free(item);
     }
-	pthread_mutex_destroy (&sp_snd_queue->mutex);
+	pthread_mutex_destroy(&sp_snd_queue->mutex);
 	free(sp_snd_queue);
 	memory_pool_destroy(mempool_buf);
 	memory_pool_destroy(mempool_queue_item);
@@ -302,7 +302,8 @@ int32 msg_send_syn(
 	DB_INF("cli have recv %s, len:%d, len2:%d,cmd:%d,res:%d", rcv_msg->data, len, sizeof(msg_t) + rcv_msg->dlen,
 									rcv_msg->cmd, rcv_msg->result);
 	ret = rcv_msg->result;
-	if (rcv_msg->cmd == snd_msg->cmd && rcv_msg->result == 0) {
+	if (rcv_msg->cmd == snd_msg->cmd && rcv_msg->result == 0 
+		&& rbuf != NULL && rlen != NULL && rcv_msg->dlen != 0) {
 		*rbuf = rcv_msg->data;
 		*rlen = rcv_msg->dlen;
 	}
@@ -314,10 +315,13 @@ out:
 		mem_free(snd_msg);
 	if (temp_sock) 
 		sock_delete(temp_sock);
-	if (ret != 0) {
-		mem_free(rcv_buf);
-		*rbuf = NULL;
-		*rlen = 0;
+	if (ret != 0 || rbuf == NULL || rlen == NULL || (rcv_msg && rcv_msg->dlen == 0)) {
+		if (rcv_buf)
+			mem_free(rcv_buf);
+		if (rbuf)
+			*rbuf = NULL;
+		if (rlen)
+			*rlen = 0;
 	}
 	return ret;
 	
@@ -643,4 +647,5 @@ int32 free_rcv_buf(void *rcv_buf)
 		mem_free((void *)msg - sizeof(struct nlmsghdr));
 	return 0;
 }
+
 

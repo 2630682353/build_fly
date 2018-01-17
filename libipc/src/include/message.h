@@ -86,8 +86,8 @@ enum error_code {
 typedef int32 (*msg_cmd_handle_cb)(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen);
 
 typedef struct msg_st{
-    int16    ver;       /*版本号,目前为0x01*/
- 	int16    flag;      /*0:表示请求报文;1:表示应答报文*/
+    int16    ver;        /*版本号,目前为0x01*/
+ 	int16    flag;       /*0:表示请求报文;1:表示应答报文*/
     int32   cmd;        /*操作命令字,详见msg_cmd_e的定义*/
     int16   smid;       /*源模块ID*/
     int16   dmid;       /*目的模块ID*/
@@ -115,3 +115,4 @@ extern int32 free_rcv_buf(void *rcv_buf);
 #endif
 
 #endif /*__MESSAGE_H__*/
+

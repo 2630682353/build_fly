@@ -1,5 +1,5 @@
-#ifndef __TYPE_H__
-#define __TYPE_H__
+#ifndef __CWMP_TYPE_H__
+#define __CWMP_TYPE_H__
 
 #ifdef  __cplusplus
 extern "C" {
@@ -27,11 +27,11 @@ typedef struct buffer_st{
     uint32 size;            /*buffer total size*/
     uint32 offset;          /*buffer used offset*/
     uint32 len;             /*buffer used length*/
-    struct buffer_st *next; /*next buffer*/
+    //struct buffer_st *next; /*next buffer*/
 }buffer_t;
 
 #ifdef  __cplusplus
 }
 #endif
 
-#endif /*__TYPE_H__*/
+#endif /*__CWMP_TYPE_H__*/
