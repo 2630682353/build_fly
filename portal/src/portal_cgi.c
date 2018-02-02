@@ -103,8 +103,6 @@ reply_print:
 	if (out)
 		free(out);
 */
-	printf("%s\r\n\r\n","Content-Type:text/html;charset=UTF-8");
-	
 	connection_t con;
 	connection_init(&con);
 	connection_handel(&con);

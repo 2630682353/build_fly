@@ -11,9 +11,34 @@
 #include <errno.h>
 #include <fcntl.h>
 #include "timer.h"
+#include "libcom.h"
+#include <sys/wait.h>
+
 
 #define MAX_JSON_LEN 2048
-#define GMC_URL "http://192.168.20.1:81/cgi-bin/temp_cgi?opt=check_login"
+
+#define GMC_URL_HEART "http://192.168.1.81:8888/gateway/heartbeat"   
+//"http://192.168.20.1:81/cgi-bin/temp_cgi?opt=check_login"
+#define GMC_URL_RESULT "http://192.168.1.81:8888/gateway/taskResult"
+#define TOKEN_URL "http://192.168.1.160:2080/authentication/platform/token/2/"
+#define USER_QUERY_URL "http://192.168.1.160:2080/authentication/gateway/user/2/"
+#define USER_REGISTER_URL "http://192.168.1.160:2080/authentication/gateway/user/register/2/"
+#define TEXT_CODE_URL "http://192.168.1.5:2080/authentication/getAuthcode"
+
+
+#define PORTAL_FILE "/tmp/portal.tar.gz"
+#define SYSBIN_FILE "/tmp/openwrt-ramips-mt7621-mt7621-squashfs-sysupgrade.bin"
+
+#define PORTAL_WEB_DIR "/www/"
+
+enum task_id {
+	TASK_SYSTEM_REBOOT   = 100,
+	TASK_SYSTEM_UPGRADE  = 101,           
+	TASK_NET_VLANSET     = 200,             
+	TASK_PORTAL_HTML_UPDATE   = 300,        
+	TASK_PORTAL_RADIUS_UPDATE = 301
+};
+
 
 static int pipefd[2];
 
@@ -45,26 +70,6 @@ typedef struct gateway_info {
 	
 }gateway_info_t;
 
-typedef struct user_query_info
-{
-	int auth_type;
-	union {
-		struct {
-			char tel[20];		//字符串
-			char pwd[20];		//字符串
-		} tel_user;
-		struct {
-			char username[20];
-			char pwd[20];
-		} name_user;
-		struct {
-			char account[20];
-			char pwd[20];
-		} wechat_user;
-	} user;
-	unsigned char mac[6];
-}user_query_info_t;
-
 typedef struct advertising_cfg_st{
     uint32 id;
     int32 type;
@@ -91,103 +96,280 @@ typedef struct advertising_policy_st{
     uint64 flow_interval;
 }advertising_policy_t;
 
-
 static gateway_info_t gateway;
+static LIST_HEAD(tel_text_users);    /*通信对端模块信息*/
 
-int32 gateway_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
+typedef struct token_info_st{
+	char token_val[64];
+	int token_time;
+	int if_lgoin;
+}token_info_t;
+
+static token_info_t gw_token;
+
+int http_send(char *url, cJSON *send, cJSON **recv)
 {
-	printf("%s\n", ibuf);
-	char *test_mac = "FF:FF:FF:FF:FF:FE";
+	int ret = -1, rlen = 0;
+	char *jstr = NULL, *back_str = NULL;
+	cJSON *obj = NULL;
+	char cmd[4096] = {0};
+	back_str = (char*)malloc(4096);
+	if (!send) {
+		snprintf(cmd, sizeof(cmd) - 1, "curl --connect-timeout 2 -m 2 -s -H \"DevMac: %s\" %s", 
+		gateway.mac, url);
+	} else {
+		jstr = cJSON_PrintUnformatted(send); 
+		printf("http send %s\n", jstr);
+		snprintf(cmd, sizeof(cmd) - 1, 
+		"curl --connect-timeout 2 -m 2 -s -H \"Content-Type:application/json\" -H \"DevMac: %s\" -X POST --data '%s' %s", 
+		gateway.mac, jstr, url);
+	}
+	rlen = shell_printf(cmd, back_str, 4096);
+	if (rlen <= 0) {
+		GATEWAY_LOG("http return null\n");
+		printf("http return null\n");
+		goto out;
+	}
+	printf("http recv %s\n", back_str);
+	obj = cJSON_Parse(back_str);
+	if (!obj)
+		goto out;
+	cJSON *result = cJSON_GetObjectItem(obj, "result");
+	if (!result)
+		goto out;
+	ret = result->valueint;
+	if (ret)
+		goto out;
+	*recv = obj;
+out:
+	if (back_str)
+		free(back_str);
+	if (ret)
+		recv = NULL;
+	return ret;
+}
 
-	char report_data[MAX_JSON_LEN] = "report_data=";
-	char encode_report[MAX_JSON_LEN] = {0};
-	int ret = -1;
-	cJSON *root = NULL, *obj = NULL;
-	char *jstr = NULL;
-	root = cJSON_CreateObject();
-	cJSON_AddStringToObject(root, "stage", "userQuery");
-	char *devmac = mac2str(gateway.mac);
-	cJSON_AddStringToObject(root, "devMac", devmac);
-	free(devmac);
-	obj = cJSON_CreateObject();
-	cJSON_AddStringToObject(obj, "userMac", ibuf);
-	cJSON_AddItemToObject(root, "data", obj);
-	obj = NULL;
-	jstr = cJSON_PrintUnformatted(root);
-	
-	urlencode(jstr, encode_report);
-	strncat(report_data, encode_report, MAX_JSON_LEN);	
-	free(jstr);
-	jstr = NULL;
-	cJSON_Delete(root);
-	jstr = http_post(GMC_URL, report_data); 
-	if (!jstr) {
+int get_token()
+{
+	char *back_str = NULL;
+	char cmd_token[1024] = {0};
+	int rlen = 0, ret = -1;
+	cJSON *obj = NULL;
+	back_str = (char*)malloc(4096);
+	gw_token.token_time = time(NULL);
+
+	snprintf(cmd_token, sizeof(cmd_token) - 1, 
+	"curl --connect-timeout 2 -m 2 -s %s%d", TOKEN_URL, gw_token.token_time);
+	rlen = shell_printf(cmd_token, back_str, 4096);
+	if (!back_str) {
 		GATEWAY_LOG("http request return null\n");
 		goto out;
 	}
-//	printf("%s\n", out);
-	obj = cJSON_Parse(jstr);
-	if (obj)
-		printf("%s		   %s\n", obj->child->string, obj->child->valuestring);
-	else 
+	printf("token back: %s\n", back_str);
+	obj = cJSON_Parse(back_str);
+	if (!obj)
 		goto out;
-	cJSON *stage = cJSON_GetObjectItem(obj, "stage");
-	if (!stage || strcmp(stage->valuestring, "userQuery"))
+	cJSON *code = cJSON_GetObjectItem(obj, "code");
+	if (!code || code->valueint)
 		goto out;
-	cJSON *result = cJSON_GetObjectItem(obj, "result");
-	if (!result || strcmp(stage->valuestring, "OK"))
-		goto out;	
 	cJSON *data = cJSON_GetObjectItem(obj, "data");
-	if (!data)
+	if (!data || !data->valuestring)
 		goto out;
-	cJSON *usermac = cJSON_GetObjectItem(data, "userMac");
-	if (!usermac || strcmp(usermac->valuestring, ibuf))
-		goto out;
-	cJSON *auth_type = cJSON_GetObjectItem(data, "authType");
-	if (!auth_type)
-		goto out;
-	user_query_info_t qu;
-	memset(&qu, 0, sizeof(user_query_info_t));
-	qu.auth_type = 0;
-	str2mac(usermac->valuestring, qu.mac);
-	switch(auth_type->valueint) {
-		cJSON *phone_num = NULL, *wechat = NULL,
-			*username = NULL, *password = NULL;
-	case 0:
-			
-		break;
-	case 1:
-		phone_num = cJSON_GetObjectItem(data, "phoneNumber");
-		if (phone_num)
-			strncpy(qu.user.tel_user.tel, phone_num->valuestring, sizeof(qu.user.tel_user.tel) - 1);
-		break;
-	case 2:
-		wechat = cJSON_GetObjectItem(data, "wechatAccount");
-		if (wechat)
-			strncpy(qu.user.wechat_user.account, wechat->valuestring, sizeof(qu.user.wechat_user.account) - 1);
-		break;
-	case 3:
-		username = cJSON_GetObjectItem(data, "username");
-		if (username)
-			strncpy(qu.user.name_user.username, username->valuestring, sizeof(qu.user.name_user.username) - 1);
-		password = cJSON_GetObjectItem(data, "password");
-		if (password)
-			strncpy(qu.user.name_user.pwd, password->valuestring, sizeof(qu.user.name_user.pwd) - 1);
-		break;	
-	}
-	
-	memcpy(obuf, &qu, sizeof(user_query_info_t));
-	*olen = sizeof(user_query_info_t);
-	
+	strncpy(gw_token.token_val, data->valuestring, sizeof(gw_token.token_val) - 1);
+	gw_token.if_lgoin = 1;
 	ret = 0;
+out:
+	if (obj)
+		cJSON_Delete(obj);
+	if (back_str)
+		free(back_str);
+	return ret;
+}
+
+
+int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
+{
+
+	int ret = -1, rlen = 0;
+	cJSON *root = NULL, *obj = NULL;
+	char url[128] = {0};
+	root = cJSON_CreateObject();
+	
+	if (!gw_token.if_lgoin)
+		get_token();
+
+	user_query_info_t *user_info = (user_query_info_t *)ibuf;
+	
+	cJSON_AddStringToObject(root, "userMac", user_info->mac);
+	
+	cJSON_AddNumberToObject(root, "userType", 1);
+
+	snprintf(url, sizeof(url) - 1, "%s%d/%s", USER_QUERY_URL, 
+		gw_token.token_time, gw_token.token_val);
+	if ((ret = http_send(url, root, &obj)))
+		goto out;
+	
+	cJSON *result = cJSON_GetObjectItem(obj, "result");
+	if (!result)
+		goto out;
+	user_query_info_t *qu = (user_query_info_t *)obuf;
+	memcpy(qu, user_info, sizeof(user_query_info_t));
+	qu->if_exist = result->valueint;
+	if (!result->valueint) {
+		cJSON *data = cJSON_GetObjectItem(obj, "data");
+		if (!data && !data->child)
+			goto out;
+		
+		cJSON *utype = cJSON_GetObjectItem(data, "userType");
+		cJSON *umac = cJSON_GetObjectItem(data, "userMac");
+		cJSON *uname = cJSON_GetObjectItem(data, "username");
+		cJSON *upassword = cJSON_GetObjectItem(data, "password");
+		if (!utype || !umac || !uname || !upassword)
+			goto out;
+		qu->auth_type = utype->valueint;
+		strncpy(qu->mac, umac->valuestring, sizeof(qu->mac) - 1);
+		strncpy(qu->username, uname->valuestring, sizeof(qu->username) - 1);
+		strncpy(qu->password, upassword->valuestring, sizeof(qu->password) - 1);
+	}
+	*olen = sizeof(user_query_info_t);
+	ret = 0;
+out:
+	if (root)
+		cJSON_Delete(root);
+	if (obj)
+		cJSON_Delete(obj);
+	if (ret)
+		*olen = 0;
+	return ret;
+}
+
+int32 user_register_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
+{
+
+	int ret = -1, rlen = 0, matched = 0;
+	cJSON *root = NULL, *obj = NULL;
+	char url[128] = {0};
+	user_query_info_t *user_info = ibuf;
+	user_query_info_t *p = NULL, *n = NULL;
+	list_for_each_entry_safe(p, n, &tel_text_users, user_list) {
+		if (strcmp(user_info->username, p->username) == 0) {
+			if (strcmp(user_info->password, p->password) == 0) {
+				matched = 1;
+				list_del(&p->user_list);
+				free(p);
+				break;
+			}	
+		}
+	}
+	if (!matched)
+		goto out;
+	root = cJSON_CreateObject();
+	
+	cJSON_AddStringToObject(root, "userMac", user_info->mac);
+
+	cJSON_AddNumberToObject(root, "userType", user_info->auth_type);
+	cJSON_AddStringToObject(root, "devIp", gateway.wan_ip);
+	cJSON_AddStringToObject(root, "devMac", gateway.mac);
+	cJSON_AddStringToObject(root, "ssid", "jfwx608");
+	cJSON_AddStringToObject(root, "username", user_info->username);
+	cJSON_AddStringToObject(root, "password", user_info->password);
+
+	snprintf(url, sizeof(url) - 1, "%s%d/%s", USER_REGISTER_URL, 
+		gw_token.token_time, gw_token.token_val);
+
+	if ((ret = http_send(url, root, &obj)))
+		goto out;
+
+	cJSON *result = cJSON_GetObjectItem(obj, "result");
+	if (!result || result->valueint)
+		goto out;
+	ret = msg_send_syn(MSG_CMD_RADIUS_USER_AUTH, user_info, sizeof(user_query_info_t), NULL,0);
+	*olen = 0;
+out:
+	if (root)
+		cJSON_Delete(root);
+	if (obj)
+		cJSON_Delete(obj);
+	if (ret)
+		*olen = 0;
+	return ret;
+}
+
+int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
+{
+	int ret = -1, rlen = 0, verify_code = 0;
+	cJSON *root = NULL, *obj = NULL;
+	char *jstr = NULL, *back_str = NULL;
+	char url[128] = {0}, code_str[64] = {0};
+	char cmd_text[2048] = {0};
+	root = cJSON_CreateObject();
+
+	user_query_info_t *user_info = ibuf;
+	
+	cJSON_AddStringToObject(root, "phone", user_info->username);
+	cJSON_AddStringToObject(root, "center_id", "2");
+	cJSON_AddNumberToObject(root, "time", gw_token.token_time);
+	cJSON_AddStringToObject(root, "sing", gw_token.token_val);
+	
+	verify_code = time(NULL); 
+	verify_code = verify_code%1000000;
+	snprintf(code_str, sizeof(code_str) - 1, "您的服务码是：%06d【华数WIFI】", verify_code);
+	cJSON_AddStringToObject(root, "msg", code_str);
+	
+//	if ((ret = http_send(TEXT_CODE_URL, root, &obj)))
+//		goto out;
+	jstr = cJSON_PrintUnformatted(root);
+	back_str = (char*)malloc(4096);
+	
+	snprintf(cmd_text, sizeof(cmd_text) - 1, 
+		"curl --connect-timeout 2 -m 2 -s -H \"Content-Type:application/json\" -H \"DevMac: %s\" -X POST --data '%s' %s", 
+		gateway.mac, jstr, TEXT_CODE_URL);
+
+	rlen = shell_printf(cmd_text, back_str, 4096);
+	printf("http send %s\n", jstr);
+	if (rlen <= 0) {
+		GATEWAY_LOG("http return null\n");
+		printf("return null\n");
+		goto out;
+	}
+	printf("http recv %s\n", back_str);
+	obj = cJSON_Parse(back_str);
+
+	cJSON *code = cJSON_GetObjectItem(obj, "code");
+	if (!code || code->valueint)
+		goto out;
+	ret = 0;
+	*olen = 0;
+	user_query_info_t *need_verify = malloc(sizeof(user_query_info_t));
+	memcpy(need_verify, user_info, sizeof(user_query_info_t));
+	snprintf(need_verify->password, sizeof(need_verify->password) - 1, "%6d", verify_code);
+	user_query_info_t *p = NULL;
+	int matched = 0;
+	list_for_each_entry(p, &tel_text_users, user_list) {
+		if (strcmp(p->username, need_verify->username) == 0) {
+			strcpy(p->password, need_verify->password);
+			free(need_verify);
+			matched = 1;
+			break;
+		}
+	}
+	if (!matched)
+		list_add(&need_verify->user_list, &tel_text_users);
+	
 out:
 	if (jstr)
 		free(jstr);
+	if (back_str)
+		free(back_str);
+	if (root)
+		cJSON_Delete(root);
 	if (obj)
 		cJSON_Delete(obj);
+	if (ret)
+		*olen = 0;
 	return ret;
-			
 }
+
 
 void sig_hander( int sig )  
 {  
@@ -197,24 +379,190 @@ void sig_hander( int sig )
 	errno = save_errno;
 } 
 
+int portal_wget(int id, int code, unsigned char *md5, char *url)
+{
+	int i = 0, pid = -1;
+	char cmd[512];
+	unsigned char temp_md5[32];
+	char push_msg[32] = {0};
+	pid = fork();
+	if (pid < 0)
+		return -1;
+	else if (pid > 0) 
+		return 0;
+
+	snprintf(cmd, sizeof(cmd) - 1, "wget -O %s -T 60 %s", PORTAL_FILE, url);
+
+	for (i = 0; i < 3; i++) {
+		if (!system(cmd))
+			break;
+		sleep(3);
+	}
+	if (i > 3)
+		goto err;
+	if (igd_md5sum(PORTAL_FILE, temp_md5)) {
+		GATEWAY_LOG("%s calc md5 fail\n", PORTAL_FILE);
+		goto err;
+	}
+
+	for (i = 0; i < 16; i++)
+		sprintf(&cmd[i*2], "%02X", temp_md5[i]);
+	if (strncasecmp(cmd, md5, 32)) {
+			GATEWAY_LOG("MD5ERR:\n%s\n%s\n", cmd, md5);
+			strncpy(push_msg, sizeof(push_msg) - 1, "md5 check err");
+			goto err;
+	}
+	snprintf(cmd, sizeof(cmd), "tar -zxvf %s -C %s",
+			PORTAL_FILE, PORTAL_WEB_DIR);
+	system(cmd);
+	report_task(id, code, 0, NULL);
+	snprintf(cmd, sizeof(cmd) - 1, "rm -rf %s", PORTAL_FILE);
+	system(cmd);
+	exit(0);
+err:
+	report_task(id, code, 1, push_msg);
+	snprintf(cmd, sizeof(cmd) - 1, "rm -rf %s", PORTAL_FILE);
+	system(cmd);
+	exit(-1);
+	
+}
+
+int sysbin_wget(int id, int code, unsigned char *md5, char *url)
+{
+	int i = 0, pid = -1;
+	char cmd[512];
+	unsigned char temp_md5[32];
+	char push_msg[32] = {0};
+	pid = fork();
+	if (pid < 0)
+		return -1;
+	else if (pid > 0) 
+		return 0;
+
+	snprintf(cmd, sizeof(cmd) - 1, "wget -O %s -T 60 %s", SYSBIN_FILE, url);
+
+	for (i = 0; i < 3; i++) {
+		if (!system(cmd))
+			break;
+		sleep(3);
+	}
+	if (i > 3)
+		goto err;
+	if (igd_md5sum(SYSBIN_FILE, temp_md5)) {
+		GATEWAY_LOG("%s calc md5 fail\n", PORTAL_FILE);
+		goto err;
+	}
+
+	for (i = 0; i < 16; i++)
+		sprintf(&cmd[i*2], "%02X", temp_md5[i]);
+	if (strncasecmp(cmd, md5, 32)) {
+			GATEWAY_LOG("MD5ERR:\n%s\n%s\n", cmd, md5);
+			strncpy(push_msg, sizeof(push_msg) - 1, "md5 check err");
+			goto err;
+	}
+	report_task(id, code, 0, NULL);
+	snprintf(cmd, sizeof(cmd) - 1, "sysupgrade %s &", SYSBIN_FILE);
+	system(cmd);
+	snprintf(cmd, sizeof(cmd) - 1, "rm -rf %s", PORTAL_FILE);
+	system(cmd);
+	exit(0);
+err:
+	report_task(id, code, 1, push_msg);
+	snprintf(cmd, sizeof(cmd) - 1, "rm -rf %s", PORTAL_FILE);
+	system(cmd);
+	exit(-1);
+	
+}
+
+int report_task(int id, int code,int result, char *msg) {
+
+	int ret = -1;
+	cJSON *root = cJSON_CreateObject();
+	cJSON *task_arr = cJSON_CreateArray();
+	cJSON *obj = NULL;
+
+	obj = cJSON_CreateObject();
+	cJSON_AddNumberToObject(obj, "id", id);
+	cJSON_AddNumberToObject(obj, "taskCode", code);
+	cJSON_AddNumberToObject(obj, "result", result);
+	if (msg)
+		cJSON_AddStringToObject(obj, "message", msg);
+	else
+		cJSON_AddNullToObject(obj, "message");
+	cJSON_AddItemToArray(task_arr, obj);
+
+	cJSON_AddItemToObject(root, "taskList",task_arr);
+	if ((ret = http_send(GMC_URL_RESULT, root, &obj)))
+		goto out;
+	
+out:
+	if (root)
+		cJSON_Delete(root);
+	if (obj)
+		cJSON_Delete(obj);
+	return ret;
+}
+
 int do_task(cJSON *task_list)
 {
+	printf("do_task\n");
 	cJSON *child_item = task_list->child;
+	cJSON *task_id = NULL, *task_code = NULL, *task_para = NULL,
+			*md5_code = NULL;
+	cJSON *download_url = NULL;
+	
+	char *bask_str = (char*)malloc(4096);
+	char cmd_task[4096] = {0};
+	int rlen = 0;
 	while (child_item) {
-		cJSON *task_id = cJSON_GetObjectItem(child_item, "id");
-		if (task_id) {
-			switch(task_id->valueint) {
-			case TASK_UPDATE_POTAL_HTML:
-				printf("update portal\n");
+		task_id = cJSON_GetObjectItem(child_item, "id");
+		task_code = cJSON_GetObjectItem(child_item, "taskCode");
+		if (task_code) {
+			switch(task_code->valueint) {
+			case TASK_SYSTEM_REBOOT:
+//				uuci_set("task_record.need_report.reboot=1");
+				
+				report_task(task_id->valueint, task_code->valueint, 0, NULL);
+				rlen = shell_printf("reboot", bask_str, 4096);
+				printf("task reboot\n");
 				break;
-			case TASK_UPDATE_AAA_ADDRESS:
-				printf("update address\n");
+			case TASK_PORTAL_HTML_UPDATE:
+				task_para = cJSON_GetObjectItem(child_item, "taskParam");
+				if (!task_para) {
+					printf("no param\n");
+					break;
+				}
+				download_url = cJSON_GetObjectItem(task_para, "url");
+				md5_code = cJSON_GetObjectItem(task_para, "md5Code");
+				if (!download_url || !md5_code) {
+					printf("no url, or no md5 code");
+					break;
+				}			
+				portal_wget(task_id->valueint, task_code->valueint, md5_code->valuestring, download_url->valuestring);
+				break;
+			case TASK_SYSTEM_UPGRADE:
+				task_para = cJSON_GetObjectItem(child_item, "taskParam");
+				if (!task_para) {
+					printf("no param\n");
+					break;
+				}
+				download_url = cJSON_GetObjectItem(task_para, "url");
+				md5_code = cJSON_GetObjectItem(task_para, "md5Code");
+				if (!download_url || !md5_code) {
+					printf("no url, or no md5 code");
+					break;
+				}			
+				sysbin_wget(task_id->valueint, task_code->valueint, md5_code->valuestring, download_url->valuestring);
 				break;
 			}
-
 		}
-			
+		child_item = child_item->next;
+	
 	}
+	if (bask_str)
+		free(bask_str);
+	
+	return 0;
 
 }
 
@@ -222,13 +570,18 @@ int send_heart_beat()
 {
 	//char report_data[MAX_JSON_LEN] = "report_data=";
 	//char encode_report[MAX_JSON_LEN] = {0};
-	int ret = -1;
+	int ret = -1, rlen = 0, status = 0, w_pid = 0;
 	cJSON *root = NULL, *obj = NULL;
-	char *jstr = NULL, *back_str = NULL;
+	char url[128] = {0};
+	if (!gw_token.if_lgoin)
+		get_token();
+	gateway_info_update();
+	w_pid = waitpid(-1, &status, WNOHANG);
+	printf("wait pid hhhhhhhhhhhhhhhhhhhhhhhhhhhh = %d\n", w_pid);
 	root = cJSON_CreateObject();
-	cJSON_AddStringToObject(root, "stage", "heartbeat");
-
-	cJSON_AddStringToObject(root, "devMac", gateway.mac);
+	
+//	cJSON_AddStringToObject(root, "stage", "heartbeat");
+//	cJSON_AddStringToObject(root, "devMac", gateway.mac);
 	
 	cJSON_AddStringToObject(root, "hardVersion", gateway.hard_version);
 	cJSON_AddStringToObject(root, "softVersion", gateway.soft_version);
@@ -244,50 +597,22 @@ int send_heart_beat()
 	cJSON_AddNumberToObject(root, "date", gateway.date);
 	cJSON_AddNumberToObject(root, "uptime", gateway.uptime);
 	
-	jstr = cJSON_PrintUnformatted(root);
-	
-	cJSON_Delete(root);
-	printf("gateway:%s\n", jstr);
-	
-/*
-	back_str = http_post(GMC_URL, jstr); 
-
-	if (!back_str) {
-		GATEWAY_LOG("http request return null\n");
-		goto out;
-	}
-
-//	printf("%s\n", out);
-	obj = cJSON_Parse(back_str);
-	if (obj)
-		printf("%s         %s\n", obj->child->string, obj->child->valuestring);
-	else 
+	if ((ret = http_send(GMC_URL_HEART, root, &obj)))
 		goto out;
 
-*/
-/*
-	cJSON *stage = cJSON_GetObjectItem(obj, "stage");
-	if (!stage || strcmp(stage->valuestring, "heartbeat"))
-		goto out;
-*/
-
-
-/*
 	cJSON *result = cJSON_GetObjectItem(obj, "result");
-	if (!result || strcmp(result->valuestring, "OK"))
+	if (!result || result->valueint)
 		goto out;	
 	cJSON *data = cJSON_GetObjectItem(obj, "data");
 	if (data && data->child && !strcmp(data->child->string, "taskList"))
 		do_task(data->child);
 	ret = 0;
+
 out:
-	if (jstr)
-		free(jstr);
-	if (back_str)
-		free(back_str);
+	if (root)
+		cJSON_Delete(root);
 	if (obj)
 		cJSON_Delete(obj);
-*/
 	return ret;
 
 }
@@ -308,7 +633,7 @@ int gateway_info_init()
 		arr_strcpy(gateway.wan_mode, array[0]);
 		uuci_get_free(array, num);
 	}
-	if ((rlen = shell_printf("ifstatus wan | grep \"address\" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'",
+	if ((rlen = shell_printf("ifstatus wan | grep \"address\" | grep -oE '[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}'",
 					gateway.wan_ip, sizeof(gateway.wan_ip))) > 0) {
 		gateway.wan_ip[rlen - 1] = '\0';
 	}
@@ -346,6 +671,7 @@ int gateway_info_init()
 		gateway.memory_total = info.totalram;
 		
 	}
+	return 0;
 					
 }
 
@@ -360,7 +686,7 @@ int gateway_info_update()
 		arr_strcpy(gateway.wan_mode, array[0]);
 		uuci_get_free(array, num);
 	}
-	if ((rlen = shell_printf("ifstatus wan | grep \"address\" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'",
+	if ((rlen = shell_printf("ifstatus wan | grep \"address\" | grep -oE '[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}'",
 					gateway.wan_ip, sizeof(gateway.wan_ip))) > 0) {
 		gateway.wan_ip[rlen - 1] = '\0';
 	}
@@ -380,6 +706,7 @@ int gateway_info_update()
 		gateway.uptime = info.uptime;
 		gateway.memory_free = info.freeram;
 	}
+	return 0;
 }
 
 unsigned int black_mac[6] = {0};
@@ -494,7 +821,7 @@ void query_adv_policy()
 			}
 } 
 
-main (int argc, char **argv)
+int main (int argc, char **argv)
 {
 	
 	int ret = 0, i = 0;
@@ -505,8 +832,11 @@ main (int argc, char **argv)
 		return -1;
 	
 	msg_init(MODULE_MANAGE);
-	msg_cmd_register(MSG_CMD_MANAGE_USER_QUERY, gateway_query_handler);
+	msg_cmd_register(MSG_CMD_MANAGE_USER_QUERY, user_query_handler);
+	msg_cmd_register(MSG_CMD_MANAGE_USER_REGISTER, user_register_handler);
+	msg_cmd_register(MSG_CMD_MANAGE_TEXT_SEND, send_tel_code_handler);
 	msg_dst_module_register_netlink(MODULE_AS);
+	msg_dst_module_register_unix(MODULE_RADIUS);
 	
 	signal(SIGINT, sig_hander);
 	signal(SIGTERM, sig_hander);
@@ -515,6 +845,8 @@ main (int argc, char **argv)
 	struct timeval tv;
 	fd_set fds;
 	int max_fd = 0;
+	add_timer(send_heart_beat, 2, 1, 60);
+//	add_timer(gateway_info_update, 1, 1, 5);
 	while (1) {
 //		gateway_info_update();
 //		if (send_heart_beat())
@@ -523,14 +855,15 @@ main (int argc, char **argv)
 //			printf("heart_beat success\n");
 //		sleep(20);
 
-		sleep(20);
-		black_list_add_send();
-		sleep(20);
-		black_list_del_send();
-		add_timer(add_advertise, 60, 1, 120);
-		add_timer(delete_advertise, 120, 1, 120);
-		add_timer(set_adv_policy, 30, 1, 60);
-		add_timer(query_adv_policy, 60, 1, 60);
+//		sleep(20);
+//		black_list_add_send();
+//		sleep(20);
+//		black_list_del_send();
+//		add_timer(add_advertise, 60, 1, 120);
+//		add_timer(delete_advertise, 120, 1, 120);
+//		add_timer(set_adv_policy, 30, 1, 60);
+//		add_timer(query_adv_policy, 60, 1, 60);
+
 		tv.tv_sec = 60;
 		tv.tv_usec = 0;
 		FD_ZERO(&fds);
@@ -560,6 +893,7 @@ main (int argc, char **argv)
 				}
 			}
 		}
+
 	}
 
 	return 0;

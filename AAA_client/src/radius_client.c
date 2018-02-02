@@ -4,7 +4,10 @@
 #include	"pathnames.h"
 #include	"message.h"
 #include    "list.h"
+#include    "libcom.h"
 #include     "log.h"
+#include     "nlk_ipc.h"
+
 #define RC_CONFIG_FILE "/usr/local/etc/radiusclient/radiusclient.conf"
 static char *pname = NULL;
 char		*default_realm = NULL;
@@ -39,13 +42,31 @@ typedef struct user_info
 }user_info_t;
 
 char temp_mac[6] = {0};
+char dev_mac[20] = {0};
+
+int get_dev_mac()
+{
+	char **array = NULL;
+	int num, i = 0;
+	if (!uuci_get("network.wan.macaddr", &array, &num)) {
+		arr_strcpy(dev_mac, array[0]);
+		uuci_get_free(array, num);
+	}
+	while (dev_mac[i] != '\0') {
+		if (dev_mac[i] == ':')
+			dev_mac[i] = '-';
+		i++;
+	}
+	return 0;
+}
 int tem = 0;
 
 typedef struct auth_ok_user
 {
 	struct list_head list;
-	unsigned char mac[6];
+	char mac[32];
 	time_t t;
+	authenticated_cfg_t ucfg;
 }auth_ok_user_t;
 
 static LIST_HEAD(auth_ok_list);    /*认证通过链表*/
@@ -55,18 +76,25 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	char 		msg[PW_MAX_MSG_SIZE], username_realm[256];
 	VALUE_PAIR 	*send = NULL, *received = NULL, *vendor = NULL;
 	uint32_t		service;
-	int result, ret = -1;
+	int result, ret = -1, value_temp;
+	struct in_addr ip;
+	user_query_info_t *u = (user_query_info_t *)ibuf;
 	
-//	if (ilen != sizeof(user_info_t))
-//		goto error;
-	
-	user_info_t *u = (user_info_t *)ibuf;
-/*
-	strncpy(username_realm, u->name, sizeof(username_realm));
+	auth_ok_user_t *p = NULL;
+	list_for_each_entry(p, &auth_ok_list, list) {
+		if (strcmp(p->mac, u->mac) == 0) {
+			ret = 0;
+			*olen = 0;
+			goto error;
+		}
+	}
 
+	//Fill in User-Name
+	strncpy(username_realm, u->username, sizeof(username_realm));
+		printf("uname %s pwd %s\n", u->username, u->password);
+	/* Append default realm */
 	if ((strchr(username_realm, '@') == NULL) && default_realm &&
-	    (*default_realm != '\0'))
-	{
+	    (*default_realm != '\0')) {
 		strncat(username_realm, "@", sizeof(username_realm)-strlen(username_realm)-1);
 		strncat(username_realm, default_realm, sizeof(username_realm)-strlen(username_realm)-1);
 	}
@@ -74,66 +102,125 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	if (rc_avpair_add(rh, &send, PW_USER_NAME, username_realm, -1, 0) == NULL)
 		goto error;
 
-	if (rc_avpair_add(rh, &send, PW_USER_PASSWORD, u->pwd, -1, 0) == NULL)
+	// Fill in User-Password
+	
+	char chap_passwd[40] = "a";
+	strcat(chap_passwd, u->password);
+
+	strcat(chap_passwd, "1234567890123456");
+//	printf("%s\n", chap_passwd);
+	char md5[20] = {0};
+	rc_md5_calc(md5, chap_passwd, strlen(chap_passwd));
+//	printf("%s\n", md5);
+	char temp[20] = "a";
+	printf("%s\n", temp);
+	memcpy(&temp[1], md5, 16);
+
+	if (rc_avpair_add(rh, &send, PW_CHAP_PASSWORD, temp, 17, 0) == NULL)
 		goto error;
 
+	if (rc_avpair_add(rh, &send, PW_CHAP_CHALLENGE, "1234567890123456", -1, 0) == NULL)
+		goto error;
+
+	if (rc_avpair_add(rh, &send, PW_NAS_IDENTIFIER, "AC", -1, 0) == NULL)
+		goto error;
+
+	value_temp = 19;
+	if (rc_avpair_add(rh, &send, PW_NAS_PORT_TYPE, &value_temp, 4, 0) == NULL)
+		goto error;
+
+	if (rc_avpair_add(rh, &send, 87, "slot=1;subslot=0;port=0;vlanid=1;", -1, 0) == NULL)
+		goto error;
+	/*
+	if (rc_avpair_add(rh, &send, PW_VENDOR_SPECIFIC, "25506/2011", -1, 0) == NULL)
+		goto error;
+	*/
+	int rlen = 0;
+	char wan_ip[20] = {0};
+	if ((rlen = shell_printf("ifstatus wan | grep \"address\" | grep -oE '[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}'",
+					wan_ip, sizeof(wan_ip))) > 0) {
+		wan_ip[rlen - 1] = '\0';
+	}
+	printf("wanip %s\n", wan_ip);
+	ip.s_addr = inet_addr(wan_ip);
+	ip.s_addr = htonl(ip.s_addr);
+	if (rc_avpair_add(rh, &send, PW_FRAMED_IP_ADDRESS, &ip.s_addr, 4, 0) == NULL)
+		goto error;
+	
+	value_temp = 1;
+	if (rc_avpair_add(rh, &send, PW_FRAMED_PROTOCOL, &value_temp, 4, 0) == NULL)
+		goto error;
+
+	if (rc_avpair_add(rh, &send, PW_ACCT_SESSION_ID, "12345678901234567890123456789012345678", -1, 0) == NULL)
+		goto error;
+	
+	if (rc_avpair_add(rh, &send, PW_CALLING_STATION_ID, "f4-f5-db-e3-18-3d", -1, 0) == NULL)
+		goto error;
+	char temp_called_station_id[32] = {0};
+	snprintf(temp_called_station_id, 31, "%s:jfwx608", dev_mac);
+	printf("called %s\n", temp_called_station_id);
+	if (rc_avpair_add(rh, &send, PW_CALLED_STATION_ID, temp_called_station_id, -1, 0) == NULL)
+		goto error;
+	
+	ip.s_addr = inet_addr(wan_ip);
+	ip.s_addr = htonl(ip.s_addr);
+	if (rc_avpair_add(rh, &send, PW_NAS_IP_ADDRESS, &ip.s_addr, 4, 0) == NULL)
+		goto error;
+
+	//Fill in Service-Type
 	service = PW_FRAMED;
 	if (rc_avpair_add(rh, &send, PW_SERVICE_TYPE, &service, -1, 0) == NULL)
 		goto error;
 
 	result = rc_auth(rh, 0, send, &received, msg);
+	printf("send auth\n");
 	if (result == OK_RC) {
-		fprintf(stderr, "\"%s\" RADIUS Authentication OK \n", u->name);
+		printf("\"%s\" RADIUS Authentication OK \n", "18202822785");
+
 		auth_ok_user_t *auth_ok_u = malloc(sizeof(auth_ok_user_t));
-		memcpy(auth_ok_u->mac, u->mac, sizeof(auth_ok_u->mac));
+		strncpy(auth_ok_u->mac, u->mac, sizeof(auth_ok_u->mac) - 1);
 		auth_ok_u->t = time(NULL);
+		
+		authenticated_cfg_t to_as;
+		memset(&auth_ok_u->ucfg, 0, sizeof(authenticated_cfg_t));
+		str2mac(u->mac, auth_ok_u->ucfg.mac);
+		auth_ok_u->ucfg.total_seconds = temp_config.tt_seconds;
+		auth_ok_u->ucfg.acct_status = temp_config.acct_sta;
+		auth_ok_u->ucfg.acct_policy = temp_config.acct_poli;
+		auth_ok_u->ucfg.total_flows = temp_config.tt_flows;
+		auth_ok_u->ucfg.ipaddr = inet_addr(u->user_ip);
+		char *rcv_buf = NULL;
+		printf("send to as\n");
+		if (msg_send_syn( MSG_CMD_AS_AUTHENTICATED_ADD,&auth_ok_u->ucfg,
+					sizeof(auth_ok_u->ucfg), &rcv_buf, &rlen) != 0) {
+			printf("MSG_CMD_AS_AUTHENTICATED_ADD err\n ");
+			if (auth_ok_u)
+					free(auth_ok_u);
+			goto error;
+		}
 		pthread_mutex_lock(&auth_mutex);
 		list_add(&auth_ok_u->list, &auth_ok_list);
 		pthread_mutex_unlock(&auth_mutex);
+		printf("add to list\n");
 		AAA_LOG("%02x %02x %02x %02x %02x %02x, time:%d\n", auth_ok_u->mac[0], auth_ok_u->mac[1],
-			auth_ok_u->mac[2], auth_ok_u->mac[3], auth_ok_u->mac[4], auth_ok_u->mac[5],auth_ok_u->t);
+				auth_ok_u->mac[2], auth_ok_u->mac[3], auth_ok_u->mac[4], auth_ok_u->mac[5],auth_ok_u->t);
+		if (rcv_buf)
+			free_rcv_buf(rcv_buf);
+		*olen = 0;
 		ret = 0;
 	}
 	else {
-		fprintf(stderr, "\"%s\" RADIUS Authentication failure (RC=%i)  \n", u->pwd, result);
+		printf("\"%s\" RADIUS Authentication failure (RC=%i)  \n", "11111", result);
 		ret = ERR_CODE_AUTHFAIL;
 	}
-	*olen = 0;
-	
-	
 error:
 	if (received)
 		rc_avpair_free(received);
 	if (send)
 		rc_avpair_free(send);
-	return ret;		
-	*/
-
-
-	auth_ok_user_t *auth_ok_u = malloc(sizeof(auth_ok_user_t));
-	memcpy(auth_ok_u->mac, u->mac, sizeof(auth_ok_u->mac));
-	auth_ok_u->t = time(NULL);
-	pthread_mutex_lock(&auth_mutex);
-	list_add(&auth_ok_u->list, &auth_ok_list);
-	pthread_mutex_unlock(&auth_mutex);
-	
-	authenticated_cfg_t to_as;
-	memset(&to_as, 0, sizeof(authenticated_cfg_t));
-	memcpy(to_as.mac, u->mac, 6);
-	to_as.total_seconds = temp_config.tt_seconds;
-	to_as.acct_status = temp_config.acct_sta;
-	to_as.acct_policy = temp_config.acct_poli;
-	to_as.total_flows = temp_config.tt_flows;
-	to_as.ipaddr = u->ipaddr;
-	char *rcv_buf;
-	int rlen = 0;
-	printf("send to as\n");
-	if (msg_send_syn( MSG_CMD_AS_AUTHENTICATED_ADD,&to_as, sizeof(to_as), &rcv_buf, &rlen) != 0)
-		printf("MSG_CMD_AS_AUTHENTICATED_ADD err\n ");
-	if (rcv_buf)
-		free_rcv_buf(rcv_buf);
-	*olen = 0;
-	return 0;
+	if (ret)
+		*olen = 0;
+	return ret;
 	
 }
 
@@ -146,7 +233,7 @@ int32 user_timeout(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	printf("have recv timeout %d\n", ilen);
 	pthread_mutex_lock(&auth_mutex);
 	list_for_each_entry_safe(p, n, &auth_ok_list, list) {
-		if (memcmp(p->mac, ibuf, sizeof(p->mac)) == 0) {
+		if (memcmp(p->ucfg.mac, ibuf, sizeof(p->ucfg.mac)) == 0) {
 			list_del(&p->list);
 			free(p);
 			break;
@@ -159,10 +246,7 @@ int32 user_timeout(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 
 void sig_hander( int sig )  
 {  
-	//	msg_final(); 
-//	rc_dict_free(rh);
-//	rc_config_free(rh);
-//	exit(0);
+
 	int save_errno = errno;
 	int msg = sig;
 	send(pipefd[1], (char *)&msg, 1, 0);
@@ -178,7 +262,7 @@ int delete_mac()
 	
 	if (&u->list != &auth_ok_list) {
 		printf("send delete to as\n");
-		if (msg_send_syn( MSG_CMD_AS_AUTHENTICATED_DELETE, u->mac, sizeof(u->mac), &rcv_buf, &rlen) != 0) {
+		if (msg_send_syn( MSG_CMD_AS_AUTHENTICATED_DELETE, u->ucfg.mac, sizeof(u->ucfg.mac), &rcv_buf, &rlen) != 0) {
 			printf("MSG_CMD_AS_AUTHENTICATED_DELETE err\n ");
 			
 		} else {
@@ -205,27 +289,26 @@ void config_update()
 	char **array = NULL;
 	char *res;
 	int num = 0;
-	if (!uuci_get("test_config.test_config.acct_policy", &array, &num)) {
-//		temp_config.acct_poli = atoi(array[0]);
+	if (!uuci_get("acct_config.acct_config.acct_policy", &array, &num)) {
+		temp_config.acct_poli = atoi(array[0]);
 		uuci_get_free(array, num);
 	}
-	if (!uuci_get("test_config.test_config.acct_status", &array, &num)) {
-//		temp_config.acct_sta = atoi(array[0]);
+	if (!uuci_get("acct_config.acct_config.acct_status", &array, &num)) {
+		temp_config.acct_sta = atoi(array[0]);
 		uuci_get_free(array, num);
 	}
-	if (!uuci_get("test_config.test_config.acct_policy", &array, &num)) {
-//		temp_config.tt_seconds = simple_strtoull(array[0], &res, 10);
+	if (!uuci_get("acct_config.acct_config.total_seconds", &array, &num)) {
+		temp_config.tt_seconds = simple_strtoull(array[0], &res, 10);
 		uuci_get_free(array, num);
 	}
-	if (!uuci_get("test_config.test_config.acct_policy", &array, &num)) {
-//		temp_config.tt_flows = simple_strtoull(array[0], &res, 10);
+	if (!uuci_get("acct_config.acct_config.total_flows", &array, &num)) {
+		temp_config.tt_flows = simple_strtoull(array[0], &res, 10);
 		uuci_get_free(array, num);
 	}
 		
 }
 
-
-main (int argc, char **argv)
+int main(int argc, char **argv)
 {
 
 	int i = 0, ret = -1;
@@ -238,8 +321,12 @@ main (int argc, char **argv)
 	if (rc_read_dictionary(rh, rc_conf_str(rh, "dictionary")) != 0)
 		return ERROR_RC;
 	default_realm = rc_conf_str(rh, "default_realm");
+	get_dev_mac();
+	config_update();
 	pthread_mutex_init(&auth_mutex, NULL);
+	
 	ret = socketpair(PF_UNIX, SOCK_STREAM, 0, pipefd);
+	
 	msg_init(MODULE_RADIUS);
 	msg_cmd_register(MSG_CMD_RADIUS_USER_AUTH, auth_handler);
 	msg_cmd_register(MSG_CMD_RADIUS_AUTH_TIMEOUT, user_timeout);

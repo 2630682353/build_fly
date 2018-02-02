@@ -4,17 +4,27 @@
 #define PRO_SYS_QUERY  "query"
 #define PRO_SYS_AUTH  "auth"
 #define PRO_SYS_LOGIN  "login"
+#define PRO_SYS_REGISTER  "register"
+#define PRO_SYS_TEXT_CODE  "text_code"
+
+
 
 
 extern int cgi_sys_query_handler(connection_t *con);   //用户查询
 extern int cgi_sys_auth_handler(connection_t *con);				//用户认证
 extern int cgi_sys_login_handler(connection_t *con);
+extern int cgi_sys_user_register_handler(connection_t *con); //用户注册
+extern int cgi_sys_text_code_handler(connection_t *con);
+
+
 
 
 static cgi_protocol_t pro_list[] ={
 	{PRO_SYS_QUERY, cgi_sys_query_handler},
 	{PRO_SYS_AUTH,cgi_sys_auth_handler},
 	{PRO_SYS_LOGIN,cgi_sys_login_handler},
+	{PRO_SYS_REGISTER,cgi_sys_user_register_handler},
+	{PRO_SYS_TEXT_CODE,cgi_sys_text_code_handler},
 	{NULL,NULL},
 };
 

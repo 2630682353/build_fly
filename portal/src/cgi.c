@@ -11,6 +11,7 @@
 #include "tools.h"
 #include "protocol.h"
 #include "connection.h"
+#include "libcom.h"
 #include <sys/stat.h>
 
 enum {
@@ -78,7 +79,8 @@ int auth_handle(user_info_t *user)
 	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_info_t), &dst_addr);
 	
 	if (len <= 0)
-	goto out;
+		goto out;
+	CGI_LOG("have send auth");
 	rcv_buf = malloc(2048);
 	len = sock_recvfrom(temp_sock, rcv_buf, 2048, NULL);
 	if (len <= 0)
@@ -99,7 +101,7 @@ out:
 	return ret;
 }
 
-int query_handle(char *mac, user_tel_info_t *user)
+int query_handle(user_query_info_t *user)
 {
 	int temp_fd = 0, len = 0, ret = -1;
 	char file_temp[20] = {0};
@@ -112,7 +114,7 @@ int query_handle(char *mac, user_tel_info_t *user)
 	
 	snd_msg->cmd = MSG_CMD_MANAGE_USER_QUERY;
 	snd_msg->dmid = MODULE_GET(MSG_CMD_MANAGE_USER_QUERY);
-	snd_msg->dlen = sizeof(user_info_t);
+	snd_msg->dlen = sizeof(user_query_info_t);
 	if ((temp_fd = mkstemp(file_temp)) < 0) {
 		CGI_LOG("mktemp error");
 		goto out;
@@ -125,7 +127,7 @@ int query_handle(char *mac, user_tel_info_t *user)
 	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
 	if (!temp_sock)
 		goto out;
-	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), mac, strlen(mac) + 1, &dst_addr);
+	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_query_info_t), &dst_addr);
 	
 	if (len <= 0)
 	goto out;
@@ -136,8 +138,106 @@ int query_handle(char *mac, user_tel_info_t *user)
 	rcv_msg = rcv_buf;
 	ret = rcv_msg->result;
 	if (ret == 0)
-		memcpy(user, rcv_msg->data, sizeof(user_tel_info_t));
+		memcpy(user, rcv_msg->data, sizeof(user_query_info_t));
 
+out:
+	if (temp_fd > 0)
+		close(temp_fd);
+	if (snd_msg)
+		free(snd_msg);
+	if (temp_sock) 
+		sock_delete(temp_sock);
+	if (rcv_buf) {
+		free(rcv_buf);
+	}
+	return ret;
+}
+
+int register_handle(user_query_info_t *user)
+{
+	int temp_fd = 0, len = 0, ret = -1;
+	char file_temp[20] = {0};
+	msg_t *snd_msg = NULL;
+	msg_t *rcv_msg = NULL;
+	socket_t *temp_sock = NULL;
+	int8 *rcv_buf = NULL;
+	strcpy(file_temp, "/tmp/test.XXXXXX");
+	snd_msg = malloc(sizeof(msg_t));
+	
+	snd_msg->cmd = MSG_CMD_MANAGE_USER_REGISTER;
+	snd_msg->dmid = MODULE_GET(MSG_CMD_MANAGE_USER_REGISTER);
+	snd_msg->dlen = sizeof(user_query_info_t);
+	if ((temp_fd = mkstemp(file_temp)) < 0) {
+		CGI_LOG("mktemp error");
+		goto out;
+	}
+	temp_sock = unix_sock_init(file_temp);
+	
+	sock_addr_u dst_addr;
+	dst_addr.un_addr.sun_family = AF_UNIX;
+	memset(dst_addr.un_addr.sun_path, 0, sizeof(dst_addr.un_addr.sun_path));
+	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
+	if (!temp_sock)
+		goto out;
+	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_query_info_t), &dst_addr);
+	
+	if (len <= 0)
+	goto out;
+	rcv_buf = malloc(2048);
+	len = sock_recvfrom(temp_sock, rcv_buf, 2048, NULL);
+	if (len <= 0)
+		goto out;
+	rcv_msg = rcv_buf;
+	ret = rcv_msg->result;
+out:
+	if (temp_fd > 0)
+		close(temp_fd);
+	if (snd_msg)
+		free(snd_msg);
+	if (temp_sock) 
+		sock_delete(temp_sock);
+	if (rcv_buf) {
+		free(rcv_buf);
+	}
+	return ret;
+}
+
+int text_code_handle(user_query_info_t *user)
+{
+	int temp_fd = 0, len = 0, ret = -1;
+	char file_temp[20] = {0};
+	msg_t *snd_msg = NULL;
+	msg_t *rcv_msg = NULL;
+	socket_t *temp_sock = NULL;
+	int8 *rcv_buf = NULL;
+	strcpy(file_temp, "/tmp/test.XXXXXX");
+	snd_msg = malloc(sizeof(msg_t));
+	
+	snd_msg->cmd = MSG_CMD_MANAGE_TEXT_SEND;
+	snd_msg->dmid = MODULE_GET(MSG_CMD_MANAGE_TEXT_SEND);
+	snd_msg->dlen = sizeof(user_query_info_t);
+	if ((temp_fd = mkstemp(file_temp)) < 0) {
+		CGI_LOG("mktemp error");
+		goto out;
+	}
+	temp_sock = unix_sock_init(file_temp);
+	
+	sock_addr_u dst_addr;
+	dst_addr.un_addr.sun_family = AF_UNIX;
+	memset(dst_addr.un_addr.sun_path, 0, sizeof(dst_addr.un_addr.sun_path));
+	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
+	if (!temp_sock)
+		goto out;
+	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_query_info_t), &dst_addr);
+	
+	if (len <= 0)
+	goto out;
+	rcv_buf = malloc(2048);
+	len = sock_recvfrom(temp_sock, rcv_buf, 2048, NULL);
+	if (len <= 0)
+		goto out;
+	rcv_msg = rcv_buf;
+	ret = rcv_msg->result;
 out:
 	if (temp_fd > 0)
 		close(temp_fd);
@@ -156,17 +256,23 @@ int cgi_sys_auth_handler(connection_t *con)
 	char *name = con_value_get(con,"name");
 	char *pwd = con_value_get(con, "pwd");
 	char *mac = con_value_get(con,"mac");
+	char *vlan = con_value_get(con,"vlan");
+	char *user_ip = con_value_get(con, "user_ip");
 	CGI_LOG("name: %s, pwd: %s, msc: %s\n", name, pwd, mac);
-	user_info_t user= {{0}, {0}, {0}};
-	if (!name || !pwd || !mac) {
+	user_query_info_t user;
+	memset(&user, 0, sizeof(user));
+	if (!name || !pwd || !mac || !vlan || !user_ip) {
 		con->html_path = "portal/error.html";
 		html_tag_add(&con->tag_list, "zc:error", "error_input");
 		goto out;
 	}
 		
-	strncpy(user.name, name, sizeof(user.name) - 1);
-	strncpy(user.pwd, pwd, sizeof(user.pwd) - 1);
-	str2mac(mac, user.mac);
+	strncpy(user.username, name, sizeof(user.username) - 1);
+	strncpy(user.password, pwd, sizeof(user.password) - 1);
+	strncpy(user.user_ip, user_ip, sizeof(user.user_ip) -1);
+	strncpy(user.mac, mac, sizeof(user.mac) -1);
+	user.vlan = atoi(vlan);
+	
 	if (auth_handle(&user) == 0) {
 		con->html_path = "portal/auth_success.html";
 	} else {
@@ -204,32 +310,108 @@ out:
 
 int cgi_sys_query_handler(connection_t *con)
 {	
-	char* mac = con_value_get(con,"mac");
+	char *mac = con_value_get(con,"mac");
+	char *vlan = con_value_get(con, "vlan");
+	char *user_ip = con_value_get(con, "user_ip");
 	
 //	cgi_str2mac()
-	user_tel_info_t user;
-	memset(&user, 0, sizeof(user_tel_info_t));
-	if (!mac) {
+	user_query_info_t user;
+	memset(&user, 0, sizeof(user_query_info_t));
+	
+	if (!mac || !user_ip || !vlan) {
 		con->html_path = "portal/error.html";
 		html_tag_add(&con->tag_list, "zc:error", "error_input");
 		goto out;
 	}
-	
-	if (query_handle(mac, &user) == 0) {
+
+	strncpy(user.mac, mac, sizeof(user.mac) - 1);
+	user.vlan = atoi(vlan);
+	strncpy(user.user_ip, user_ip, sizeof(user.user_ip) - 1);
+	if (query_handle(&user) == 0 && user.if_exist == 0) {   //0为存在该用户
   		con->html_path = "portal/query_ok.html";
-		char *r_mac = mac2str(user.mac);
-		html_tag_add(&con->tag_list, "zc:tel", user.tel);
-		html_tag_add(&con->tag_list, "zc:pwd", user.pwd);
-		html_tag_add(&con->tag_list, "zc:mac", r_mac);
-		CGI_LOG("tel: %s, pwd: %s, mac: %s\n", user.tel, user.pwd, r_mac);
-		free(r_mac);
+	
+		html_tag_add(&con->tag_list, "zc:tel", user.username);
+		html_tag_add(&con->tag_list, "zc:pwd", user.password);
+		html_tag_add(&con->tag_list, "zc:mac", user.mac);
+		char tem_vlan[6] = {0};
+		snprintf(tem_vlan, 5, "%d", user.vlan);
+		html_tag_add(&con->tag_list, "zc:vlan", tem_vlan);
+		html_tag_add(&con->tag_list, "zc:user_ip", user.user_ip);
+		CGI_LOG("tel: %s, pwd: %s, mac: %s\n", user.username, user.password, user.mac);
+		
 	} else {
 		con->html_path = "portal/index.html";
 		html_tag_add(&con->tag_list, "zc:mac", mac);
+		char tem_vlan[6] = {0};
+		snprintf(tem_vlan, 5, "%d", user.vlan);
+		html_tag_add(&con->tag_list, "zc:vlan", tem_vlan);
+		html_tag_add(&con->tag_list, "zc:user_ip", user.user_ip);
+		CGI_LOG("tel: %s, pwd: %s, mac: %s\n", user.username, user.password, user.mac);
 	}
 	
 out:
 	
 	return 0;
 }
+
+int cgi_sys_user_register_handler(connection_t *con)
+{	
+	char *name = con_value_get(con,"name");
+	char *pwd = con_value_get(con, "pwd");
+	char *mac = con_value_get(con,"mac");
+	char *vlan = con_value_get(con,"vlan");
+	char *user_ip = con_value_get(con, "user_ip");
+	CGI_LOG("name: %s, pwd: %s, msc: %s\n", name, pwd, mac);
+	user_query_info_t user;
+	memset(&user, 0, sizeof(user));
+	user.auth_type = 1;
+	
+	if (!name || !pwd || !mac || !vlan) {
+		con->html_path = "portal/error.html";
+		html_tag_add(&con->tag_list, "zc:error", "error_input");
+		goto out;
+	}
+		
+	strncpy(user.username, name, sizeof(user.username) - 1);
+	strncpy(user.password, pwd, sizeof(user.password) - 1);
+	strncpy(user.mac, mac, sizeof(user.mac) - 1);
+	strncpy(user.user_ip, user_ip, sizeof(user.user_ip) - 1);
+	user.vlan = atoi(vlan);
+	
+
+	if (register_handle(&user) == 0) {
+		con->html_path = "portal/auth_success.html";
+	} else {
+		con->html_path = "portal/auth_fail.html";
+	}
+out:
+	return 0;
+}
+
+int cgi_sys_text_code_handler(connection_t *con)
+{	
+	char *name = con_value_get(con,"name");
+//	char *mac = con_value_get(con,"mac");
+
+	user_query_info_t user;
+	memset(&user, 0, sizeof(user));
+	user.auth_type = 1;
+	
+	if (!name) {
+		cJSON_AddNumberToObject(con->response, "code", 1);
+		goto out;
+	}
+		
+	strncpy(user.username, name, sizeof(user.username) - 1);
+	
+	if (text_code_handle(&user) == 0) {
+		cJSON_AddNumberToObject(con->response, "code", 0);
+	} else {
+		cJSON_AddNumberToObject(con->response, "code", 1);
+	}
+out:
+	return 1;
+}
+
+
 

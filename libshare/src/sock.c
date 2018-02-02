@@ -14,7 +14,6 @@ void sock_delete(socket_t *sock)
         return;
     if (sock->fd >= 0) {
         close(sock->fd);
-		printf("sock fd closed\n");
     	}
     if ((AF_UNIX == sock->addr.addr.sa_family) && (strlen(sock->addr.un_addr.sun_path) > 0))
         remove(sock->addr.un_addr.sun_path);

@@ -161,7 +161,7 @@ void connection_handel(connection_t *con)
 	html_tag_t *ht = NULL;
 	struct stat st;
 	
-	if ((str_len == NULL) || (sscanf(str_len, "%d", &len)!=1) || (len>80)) {
+	if ((str_len == NULL) || (sscanf(str_len, "%d", &len)!=1) || (len>300)) {
 		
 	} else {
 		fgets(buf, len+1, stdin);
@@ -169,23 +169,33 @@ void connection_handel(connection_t *con)
 	}
 	
 	con->html_path = "error.html";
-	cgi_protocol_handler(con);
-	 
-	file = fopen(con->html_path,"r");    
-	if(stat(con->html_path, &st)) {
-		CGI_LOG("stat index error\n"); 
-		goto out;
-	} else {
 	
-		file_size = st.st_size;     //获取文件大小   
-		out_buf = malloc(file_size + 1000);   
-		memset(out_buf,'\0',file_size+1000);   
-		fread(out_buf, sizeof(char), file_size, file);
-		
-		list_for_each_entry(ht, &con->tag_list, list) {	
-			replace_str(out_buf, ht->key, ht->value);		
+	if (cgi_protocol_handler(con) == 1) {
+		printf("%s\r\n\r\n","Content-Type:application/json;charset=UTF-8");		
+		char *str = cJSON_PrintUnformatted(con->response);
+		if (str) {
+			printf("%s", str);
+			free(str);
 		}
-		printf("%s\n", out_buf);
+		
+	} else {
+		printf("%s\r\n\r\n","Content-Type:text/html;charset=UTF-8");
+		file = fopen(con->html_path,"r");    
+		if(stat(con->html_path, &st)) {
+			CGI_LOG("stat index error\n"); 
+			goto out;
+		} else {
+		
+			file_size = st.st_size;     //获取文件大小   
+			out_buf = malloc(file_size + 1000);   
+			memset(out_buf,'\0',file_size+1000);   
+			fread(out_buf, sizeof(char), file_size, file);
+			
+			list_for_each_entry(ht, &con->tag_list, list) {	
+				replace_str(out_buf, ht->key, ht->value);		
+			}
+			printf("%s\n", out_buf);
+		}
 	}
 out:
 	if (out_buf)

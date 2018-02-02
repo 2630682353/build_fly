@@ -23,7 +23,7 @@ void timer_handler() {
 	alarm(timer_timeslot);
 }
 
-util_timer *add_timer(void (*cb_func)(),int delay,int loop, int interval) {
+util_timer *add_timer(int (*cb_func)(),int delay,int loop, int interval) {
 	util_timer *t = malloc(sizeof(util_timer));
 	t->cb_func = cb_func;
 	t->expire = time(NULL) + delay;

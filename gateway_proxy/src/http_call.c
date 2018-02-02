@@ -7,7 +7,8 @@
   
 #define BUFFER_SIZE 1024  
 #define HTTP_POST "POST /%s HTTP/1.1\r\nHOST: %s:%d\r\nAccept: */*\r\n"\  
-    "Content-Type:application/x-www-form-urlencoded\r\nContent-Length: %d\r\nConnection: Close\r\n\r\n%s"  
+    "Content-Type: application/json\r\nContent-Length: %d\r\nDevMac: %s\r\nConnection: Close\r\n\r\n%s" 
+    
 #define HTTP_GET "GET /%s HTTP/1.1\r\nHOST: %s:%d\r\nAccept: */*\r\nConnection: Close\r\n\r\n"  
   
   
@@ -134,6 +135,7 @@ static char *http_parse_result(const char*lpbuf)
 static int test_if_close(const char *lpbuf) {
 	char * content_length = NULL;
 	content_length = (char*)strstr(lpbuf,"Content-Length");
+	printf("contentlength:%d\n", content_length);
 	if(!content_length){   
         	return 0;  
 	} 
@@ -151,7 +153,7 @@ static int test_if_close(const char *lpbuf) {
 	}
 }
   
-char * http_post(const char *url,const char *post_str){  
+char * http_post(const char *url, const char *dev_mac, const char *post_str){  
   
     char post[BUFFER_SIZE] = {'\0'};  
     int socket_fd = -1;  
@@ -183,7 +185,7 @@ char * http_post(const char *url,const char *post_str){
         return NULL;  
     }  
        
-    sprintf(lpbuf,HTTP_POST,file,host_addr,port,strlen(post_str),post_str);  
+    sprintf(lpbuf,HTTP_POST,file,host_addr,port,strlen(post_str),dev_mac,post_str);  
   
     if(http_tcpclient_send(socket_fd,lpbuf,strlen(lpbuf)) < 0){  
         printf("http_tcpclient_send failed..\n");  
@@ -201,6 +203,7 @@ char * http_post(const char *url,const char *post_str){
     }  
   
     http_tcpclient_close(socket_fd);  
+	printf("total!!!!!!!: %s\n", lpbuf);
   
     return http_parse_result(lpbuf);  
 }  
