@@ -9,6 +9,7 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/in_route.h>
+#include <linux/if_vlan.h>
 #include <net/route.h>
 #include <net/arp.h>
 #include <linux/inetdevice.h>
@@ -24,14 +25,8 @@
 #include "time.h"
 #include "config.h"
 #include "log.h"
-
-static int8 *portal_url = NULL;
-module_param(portal_url, charp, 0555);
-MODULE_PARM_DESC(portal_url, "Portal's URL!!");
-
-static int8 *apply_interface = NULL;
-module_param(apply_interface, charp, 0555);
-MODULE_PARM_DESC(apply_interface, "Apply interface that need authenticate!!");
+#include "portal.h"
+#include "vlan.h"
 
 static uint32 ads_maxcount_push = 32;
 module_param(ads_maxcount_push, uint, 0555);
@@ -53,122 +48,9 @@ static uint32 auth_maxcount = 1024;
 module_param(auth_maxcount, uint, 0555);
 MODULE_PARM_DESC(auth_maxcount, "The maximum number of Authenticated User!!");
 
-static uint32 tcp_session_maxcount = 1024;
-module_param(tcp_session_maxcount, uint, 0555);
-MODULE_PARM_DESC(tcp_session_maxcount, "The maximum capacity  of the TCP Session table!!");
-
-
-static struct proc_dir_entry *sp_proc_portal_url = NULL;
-#define PROC_PORTAL_URL "portal-url"
-
-static ssize_t portal_url_read(struct file *file, 
-                               int8 __user *buf, 
-                               size_t size, 
-                               loff_t *ppos)
-{
-    int8 tmp[URL_SIZE];
-    uint32 len;
-    len = sprintf(tmp, "%s\n", portal_url);
-    if (*ppos >= len)
-        return 0;
-    else
-    {
-        uint32 count = len - *ppos;
-        count = min(count,(uint32)size);
-        copy_to_user(buf, tmp+*ppos, count);
-        *ppos = *ppos + count;
-        return count;
-    }
-}
-
-static struct file_operations s_portal_url_fileops = {
-    .owner  = THIS_MODULE,
-    .read   = portal_url_read
-};
-
-static int32 proc_portal_url_init(struct proc_dir_entry *parent)
-{
-#ifdef KERNEL_4_4_7
-    struct proc_dir_entry *entry = proc_create(PROC_PORTAL_URL, 0, parent, &s_portal_url_fileops);
-#elif defined KERNEL_3_2_88
-    struct proc_dir_entry *entry = create_proc_entry(PROC_PORTAL_URL, 0, parent);
-#else
-    #error "undefined kernel version"
-#endif
-    if (NULL == entry)
-    {
-        DB_ERR("proc_mkdir(%s) fail!!", PROC_PORTAL_URL);
-        return -1;
-    }
-    sp_proc_portal_url = entry;
-    return 0;
-}
-static void proc_portal_url_destroy(struct proc_dir_entry *parent)
-{
-    if (NULL != sp_proc_portal_url)
-    {
-        remove_proc_entry(PROC_PORTAL_URL, parent);
-        sp_proc_portal_url = NULL;
-    }
-}
-
-static struct proc_dir_entry *sp_proc_apply_interface = NULL;
-#define PROC_APPLY_INTERFACE    "apply-interface"
-
-static ssize_t apply_interface_read(struct file *file, 
-                                    int8 __user *buf, 
-                                    size_t size, 
-                                    loff_t *ppos)
-{
-    int8 tmp[IFNAME_SIZE];
-    uint32 len;
-    len = sprintf(tmp, "%s\n", apply_interface);
-    if (*ppos >= len)
-        return 0;
-    else
-    {
-        uint32 count = len - *ppos;
-        count = min(count,(uint32)size);
-        copy_to_user(buf, tmp+*ppos, count);
-        *ppos = *ppos + count;
-        return count;
-    }
-}
-
-static struct file_operations s_apply_interface_fileops = {
-    .owner  = THIS_MODULE,
-    .read   = apply_interface_read
-};
-
-static int32 proc_apply_interface_init(struct proc_dir_entry *parent)
-{
-#ifdef KERNEL_4_4_7
-    struct proc_dir_entry *entry = proc_create(PROC_APPLY_INTERFACE, 0, parent, &s_apply_interface_fileops);
-#elif defined KERNEL_3_2_88
-    struct proc_dir_entry *entry = create_proc_entry(PROC_APPLY_INTERFACE, 0, parent);
-#else
-    #error "undefined kernel version"
-#endif
-    if (NULL == entry)
-    {
-        DB_ERR("proc_mkdir(%s) fail!!", PROC_APPLY_INTERFACE);
-        return -1;
-    }
-    sp_proc_apply_interface = entry;
-    return 0;
-}
-static void proc_apply_interface_destroy(struct proc_dir_entry *parent)
-{
-    if (NULL != sp_proc_apply_interface)
-    {
-        remove_proc_entry(PROC_APPLY_INTERFACE, parent);
-        sp_proc_apply_interface = NULL;
-    }
-}
-
 
 static struct proc_dir_entry *sp_proc_access_service = NULL;
-#define PROC_ACCESS_SERVICE "Access-Service"
+#define PROC_ACCESS_SERVICE "as"
 static int32 proc_access_service_init(void)
 {
     struct proc_dir_entry *entry = proc_mkdir(PROC_ACCESS_SERVICE, NULL);
@@ -178,15 +60,13 @@ static int32 proc_access_service_init(void)
         return -1;
     }
     sp_proc_access_service = entry;
-    if (0 != proc_portal_url_init(sp_proc_access_service)
-        || 0 != proc_apply_interface_init(sp_proc_access_service)
+    if (0 != portal_proc_init(sp_proc_access_service)
         || 0 != advertising_proc_init(sp_proc_access_service)
         || 0 != blacklist_proc_init(sp_proc_access_service)
         || 0 != whitelist_proc_init(sp_proc_access_service)
         || 0 != authenticated_proc_init(sp_proc_access_service))
     {
-        proc_portal_url_destroy(sp_proc_access_service);
-        proc_apply_interface_destroy(sp_proc_access_service);
+        portal_proc_destroy(sp_proc_access_service);
         advertising_proc_destroy(sp_proc_access_service);
         blacklist_proc_destroy(sp_proc_access_service);
         whitelist_proc_destroy(sp_proc_access_service);
@@ -201,8 +81,7 @@ static void proc_access_service_destroy(void)
 {
     if (NULL != sp_proc_access_service)
     {
-        proc_portal_url_destroy(sp_proc_access_service);
-        proc_apply_interface_destroy(sp_proc_access_service);
+        portal_proc_destroy(sp_proc_access_service);
         advertising_proc_destroy(sp_proc_access_service);
         blacklist_proc_destroy(sp_proc_access_service);
         whitelist_proc_destroy(sp_proc_access_service);
@@ -215,8 +94,7 @@ static void proc_access_service_destroy(void)
 static inline BOOL is_to_local(struct sk_buff *skb)
 {
     int32 ret;
-    const struct iphdr *iph;
-    iph = ip_hdr(skb);
+    const struct iphdr *iph = http_iphdr(skb);
     /*loop ip addr*/
     if (0x7f000001 == htonl(iph->daddr))
         return TRUE;
@@ -225,10 +103,7 @@ static inline BOOL is_to_local(struct sk_buff *skb)
     {
         struct rtable *rt = skb_rtable(skb);
         if (RTN_LOCAL == rt->rt_type)
-        {
-            //DB_INF("daddr="IPSTR" is to loacl.", IP2STR(iph->daddr));
 		    return TRUE;
-        }
     }
     return FALSE;
 }
@@ -238,14 +113,25 @@ static inline BOOL is_to_local(struct sk_buff *skb)
 #define DHCP_SERVER_PORT    (67)
 static inline BOOL is_bypass(struct sk_buff *skb)
 {
-    struct ethhdr *ethh = eth_hdr(skb);
-    struct iphdr *iph = ip_hdr(skb);
-
-    if (NULL == apply_interface || 0 != strcmp(skb->dev->name, apply_interface))
+    struct iphdr *iph = NULL;
+    if (TRUE != portal_skb_exist(skb))
         return TRUE;
-    if (htons(ETH_P_IP) != ethh->h_proto
-        || IPPROTO_ICMP == iph->protocol)
-        return TRUE;
+    if (skb_from_vlan_dev(skb))
+    {
+        struct vlan_ethhdr *vethh = vlan_eth_hdr(skb);
+        iph = http_iphdr(skb);
+        if (htons(ETH_P_IP) != vethh->h_vlan_encapsulated_proto
+            || IPPROTO_ICMP == iph->protocol)
+            return TRUE;
+    }
+    else
+    {
+        struct ethhdr *ethh = eth_hdr(skb);
+        iph = http_iphdr(skb);
+        if (htons(ETH_P_IP) != ethh->h_proto
+            || IPPROTO_ICMP == iph->protocol)
+            return TRUE;
+    }
     if (IPPROTO_UDP == iph->protocol)
     {
         struct udphdr *udph = (struct udphdr *)((uint8 *)iph + (iph->ihl * 4));
@@ -295,10 +181,35 @@ static int32 blacklist_uplink_skb_check(struct sk_buff *skb)
 
 static inline int32 portal_url_push(struct sk_buff *skb)
 {
-    if (likely(NULL != portal_url))
-        return http_check_inner_reply(skb, portal_url);
+    portal_interface_t *interface = NULL;
+    portal_vlan_t *vlan = NULL;
+    int8 *url = NULL;
+    int32 ret = -1;
+    if (skb_from_vlan_dev(skb))
+    {
+        struct vlan_ethhdr *vethh = vlan_eth_hdr(skb);
+        vlan = portal_vlan_get(ntohs(vethh->h_vlan_TCI));
+        if (NULL != vlan)
+            url = vlan->url;
+    }
     else
-        return -1;
+    {
+        interface = portal_interface_get(skb->dev->name);
+        if (NULL != interface)
+            url = interface->url;
+    }
+    if (NULL == url || strlen(url) <= 0)
+        ret = 0;
+    else
+    {
+        //DB_INF("portal-url[%s].", url);
+        ret = http_check_inner_reply(skb, url);
+    }
+    if (NULL != vlan)
+        portal_vlan_put(vlan);
+    if (NULL != interface)
+        portal_interface_put(interface);
+    return ret;
 }
 
 static int32 authenticated_uplink_skb_check(struct sk_buff *skb)
@@ -306,7 +217,6 @@ static int32 authenticated_uplink_skb_check(struct sk_buff *skb)
     int32 ret = ND_DROP;
     struct ethhdr *ethh = eth_hdr(skb);
     authenticated_t *auth = NULL;
-
     auth = authenticated_search(ethh->h_source);
     if (unlikely(NULL == auth))
     {
@@ -377,8 +287,17 @@ static inline BOOL is_outer_bypass(struct sk_buff *skb)
 {
     const struct iphdr *iph = ip_hdr(skb);
 
-    if (unlikely(NULL == apply_interface || 0 != strcmp(skb->dev->name, apply_interface)))
-        return TRUE;
+    if (skb_to_vlan_dev(skb))
+    {
+        if (!portal_vlan_exist(vlan_dev_vlan_id(skb->dev))
+            && !portal_interface_exist(skb->dev->name))
+            return TRUE;
+    }
+    else
+    {
+        if (!portal_interface_exist(skb->dev->name))
+            return TRUE;
+    }
     if (IPPROTO_ICMP == iph->protocol)
         return TRUE;
     if (IPPROTO_UDP == iph->protocol)
@@ -458,7 +377,6 @@ static uint32 access_hook_post_routing_hook(uint32 hooknum,
 					                        const struct net_device *out,
 					                        int32 (*okfn)(struct sk_buff *))
 {
-    const struct iphdr *iph = ip_hdr(skb);
     uint8 hw_dest[HWADDR_SIZE];
     int32 ret;
     if (TRUE == is_outer_bypass(skb))
@@ -466,6 +384,7 @@ static uint32 access_hook_post_routing_hook(uint32 hooknum,
     ret = arp_find(hw_dest, skb);
     if (0 != ret)
     {
+        const struct iphdr *iph = ip_hdr(skb);
         DB_ERR("Not find nexthop. iph->daddr["IPSTR"].", IP2STR(iph->daddr));
         return NF_DROP;
     }
@@ -513,6 +432,11 @@ static int32 __init access_module_init(void)
         DB_ERR("Authenticated User init fail!!");
         goto err;
     }
+    if (0 != portal_init())
+    {
+        DB_ERR("Portal init fail!!");
+        goto err;
+    }
     if (0 != nd_register_hook(&access_nd_hook_ops))
     {
         DB_ERR("NetDevice hook register fail!!");
@@ -530,6 +454,7 @@ static int32 __init access_module_init(void)
 err:
     nf_unregister_hook(&access_nf_post_routing_hook_ops);
     nd_unregister_hook(&access_nd_hook_ops);
+    portal_destroy();
     authenticated_destroy();
     whitelist_destroy();
     blacklist_destroy();
@@ -545,6 +470,7 @@ static void __exit access_module_exit(void)
     proc_access_service_destroy();
     nf_unregister_hook(&access_nf_post_routing_hook_ops);
     nd_unregister_hook(&access_nd_hook_ops);
+    portal_destroy();
     authenticated_destroy();
     whitelist_destroy();
     blacklist_destroy();

@@ -50,7 +50,7 @@ enum {
 	CGI_ERR_RULE,
 };
 
-int auth_handle(user_info_t *user)
+int auth_handle(user_query_info_t *user)
 {
 	int temp_fd = 0, len = 0, ret = -1;
 	char file_temp[20] = {0};
@@ -63,7 +63,7 @@ int auth_handle(user_info_t *user)
 	
 	snd_msg->cmd = MSG_CMD_RADIUS_USER_AUTH;
 	snd_msg->dmid = MODULE_GET(MSG_CMD_RADIUS_USER_AUTH);
-	snd_msg->dlen = sizeof(user_info_t);
+	snd_msg->dlen = sizeof(user_query_info_t);
 	if ((temp_fd = mkstemp(file_temp)) < 0) {
 		CGI_LOG("mktemp error");
 		goto out;
@@ -76,7 +76,7 @@ int auth_handle(user_info_t *user)
 	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
 	if (!temp_sock)
 		goto out;
-	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_info_t), &dst_addr);
+	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_query_info_t), &dst_addr);
 	
 	if (len <= 0)
 		goto out;
@@ -262,8 +262,8 @@ int cgi_sys_auth_handler(connection_t *con)
 	user_query_info_t user;
 	memset(&user, 0, sizeof(user));
 	if (!name || !pwd || !mac || !vlan || !user_ip) {
-		con->html_path = "portal/error.html";
-		html_tag_add(&con->tag_list, "zc:error", "error_input");
+
+		cJSON_AddNumberToObject(con->response, "code", 1);
 		goto out;
 	}
 		
@@ -274,13 +274,13 @@ int cgi_sys_auth_handler(connection_t *con)
 	user.vlan = atoi(vlan);
 	
 	if (auth_handle(&user) == 0) {
-		con->html_path = "portal/auth_success.html";
+		cJSON_AddNumberToObject(con->response, "code", 0);
 	} else {
-		con->html_path = "portal/auth_fail.html";
+		cJSON_AddNumberToObject(con->response, "code", 1);
 	}
 	
 out:
-	return 0;
+	return 1;
 	
 }
 
@@ -312,7 +312,11 @@ int cgi_sys_query_handler(connection_t *con)
 {	
 	char *mac = con_value_get(con,"mac");
 	char *vlan = con_value_get(con, "vlan");
-	char *user_ip = con_value_get(con, "user_ip");
+	char *user_ip = con_value_get(con, "ip");
+	char *user_agent = getenv("HTTP_USER_AGENT");
+	if (user_agent)
+		CGI_LOG("%s\n", user_agent);
+	int ret = -1;
 	
 //	cgi_str2mac()
 	user_query_info_t user;
@@ -327,27 +331,31 @@ int cgi_sys_query_handler(connection_t *con)
 	strncpy(user.mac, mac, sizeof(user.mac) - 1);
 	user.vlan = atoi(vlan);
 	strncpy(user.user_ip, user_ip, sizeof(user.user_ip) - 1);
-	if (query_handle(&user) == 0 && user.if_exist == 0) {   //0为存在该用户
-  		con->html_path = "portal/query_ok.html";
-	
-		html_tag_add(&con->tag_list, "zc:tel", user.username);
-		html_tag_add(&con->tag_list, "zc:pwd", user.password);
-		html_tag_add(&con->tag_list, "zc:mac", user.mac);
+	user.auth_type = 1;
+	con->html_path = "portal/module/mobile/mobileAuth.html";
+	ret = query_handle(&user);
+	if (ret == 0 && user.if_exist == 0) {   //0为存在该用户
+  		
+		html_tag_add(&con->tag_list, "jfwx:tel", user.username);
+		html_tag_add(&con->tag_list, "jfwx:pwd", user.password);
+		html_tag_add(&con->tag_list, "jfwx:mac", user.mac);
 		char tem_vlan[6] = {0};
 		snprintf(tem_vlan, 5, "%d", user.vlan);
-		html_tag_add(&con->tag_list, "zc:vlan", tem_vlan);
-		html_tag_add(&con->tag_list, "zc:user_ip", user.user_ip);
+		html_tag_add(&con->tag_list, "jfwx:vlan", tem_vlan);
+		html_tag_add(&con->tag_list, "jfwx:user_ip", user.user_ip);
+		html_tag_add(&con->tag_list, "jfwx:isOld", "1");
+		
 		CGI_LOG("tel: %s, pwd: %s, mac: %s\n", user.username, user.password, user.mac);
 		
-	} else {
-		con->html_path = "portal/index.html";
-		html_tag_add(&con->tag_list, "zc:mac", mac);
+	} else if (ret == 0 && user.if_exist == 1){
+		html_tag_add(&con->tag_list, "jfwx:mac", mac);
 		char tem_vlan[6] = {0};
 		snprintf(tem_vlan, 5, "%d", user.vlan);
-		html_tag_add(&con->tag_list, "zc:vlan", tem_vlan);
-		html_tag_add(&con->tag_list, "zc:user_ip", user.user_ip);
+		html_tag_add(&con->tag_list, "jfwx:vlan", tem_vlan);
+		html_tag_add(&con->tag_list, "jfwx:user_ip", user.user_ip);
+		html_tag_add(&con->tag_list, "jfwx:isOld", "0");
 		CGI_LOG("tel: %s, pwd: %s, mac: %s\n", user.username, user.password, user.mac);
-	}
+	} 
 	
 out:
 	
@@ -367,8 +375,7 @@ int cgi_sys_user_register_handler(connection_t *con)
 	user.auth_type = 1;
 	
 	if (!name || !pwd || !mac || !vlan) {
-		con->html_path = "portal/error.html";
-		html_tag_add(&con->tag_list, "zc:error", "error_input");
+		cJSON_AddNumberToObject(con->response, "code", 1);
 		goto out;
 	}
 		
@@ -380,12 +387,12 @@ int cgi_sys_user_register_handler(connection_t *con)
 	
 
 	if (register_handle(&user) == 0) {
-		con->html_path = "portal/auth_success.html";
+		cJSON_AddNumberToObject(con->response, "code", 0);
 	} else {
-		con->html_path = "portal/auth_fail.html";
+		cJSON_AddNumberToObject(con->response, "code", 1);
 	}
 out:
-	return 0;
+	return 1;
 }
 
 int cgi_sys_text_code_handler(connection_t *con)

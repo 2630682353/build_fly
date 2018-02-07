@@ -81,14 +81,16 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	user_query_info_t *u = (user_query_info_t *)ibuf;
 	
 	auth_ok_user_t *p = NULL;
+	pthread_mutex_lock(&auth_mutex);
 	list_for_each_entry(p, &auth_ok_list, list) {
 		if (strcmp(p->mac, u->mac) == 0) {
 			ret = 0;
 			*olen = 0;
+			pthread_mutex_unlock(&auth_mutex);
 			goto error;
 		}
 	}
-
+	pthread_mutex_unlock(&auth_mutex);
 	//Fill in User-Name
 	strncpy(username_realm, u->username, sizeof(username_realm));
 		printf("uname %s pwd %s\n", u->username, u->password);
@@ -113,7 +115,6 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	rc_md5_calc(md5, chap_passwd, strlen(chap_passwd));
 //	printf("%s\n", md5);
 	char temp[20] = "a";
-	printf("%s\n", temp);
 	memcpy(&temp[1], md5, 16);
 
 	if (rc_avpair_add(rh, &send, PW_CHAP_PASSWORD, temp, 17, 0) == NULL)
@@ -174,6 +175,7 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 
 	result = rc_auth(rh, 0, send, &received, msg);
 	printf("send auth\n");
+	printf("mac:%s\n", u->mac);
 	if (result == OK_RC) {
 		printf("\"%s\" RADIUS Authentication OK \n", "18202822785");
 
@@ -189,6 +191,7 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 		auth_ok_u->ucfg.acct_policy = temp_config.acct_poli;
 		auth_ok_u->ucfg.total_flows = temp_config.tt_flows;
 		auth_ok_u->ucfg.ipaddr = inet_addr(u->user_ip);
+		
 		char *rcv_buf = NULL;
 		printf("send to as\n");
 		if (msg_send_syn( MSG_CMD_AS_AUTHENTICATED_ADD,&auth_ok_u->ucfg,

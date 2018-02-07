@@ -154,7 +154,7 @@ void connection_handel(connection_t *con)
 	connection_parse(con, query);
 	char *str_len = NULL;
 	str_len = getenv("CONTENT_LENGTH");
-	int len = 0, file_size = 0;
+	int len = 0, file_size = 0, ret = 0;
 	char buf[100] = {0};
 	FILE *file = NULL;
 	char *out_buf = NULL;
@@ -169,8 +169,8 @@ void connection_handel(connection_t *con)
 	}
 	
 	con->html_path = "error.html";
-	
-	if (cgi_protocol_handler(con) == 1) {
+	ret = cgi_protocol_handler(con);
+	if (ret == 1) {
 		printf("%s\r\n\r\n","Content-Type:application/json;charset=UTF-8");		
 		char *str = cJSON_PrintUnformatted(con->response);
 		if (str) {
@@ -178,7 +178,7 @@ void connection_handel(connection_t *con)
 			free(str);
 		}
 		
-	} else {
+	} else if (ret == 0){
 		printf("%s\r\n\r\n","Content-Type:text/html;charset=UTF-8");
 		file = fopen(con->html_path,"r");    
 		if(stat(con->html_path, &st)) {
@@ -197,6 +197,7 @@ void connection_handel(connection_t *con)
 			printf("%s\n", out_buf);
 		}
 	}
+		
 out:
 	if (out_buf)
 		free(out_buf);

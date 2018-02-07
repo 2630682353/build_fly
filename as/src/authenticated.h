@@ -40,12 +40,9 @@ typedef struct auth_flow_stats_st{
 }auth_flow_stats_t;
 
 typedef struct auth_ads_st{
-    int8 policy;    /*Values from enum "ads_policy_e"*/
-    int8 type;      /*Values from enum "ads_type_e"*/
-    int8 reserve[2];
+    uint32 adsid;    /*A recent visit to the advertising ID*/
     uint64 latest_time;
     uint64 latest_flow;
-    uint32 adsid;    /*A recent visit to the advertising ID*/
 }auth_ads_t;
 
 typedef struct authenticated_st{

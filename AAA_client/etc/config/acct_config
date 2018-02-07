@@ -1,0 +1,5 @@
+config acct acct_config
+	option	acct_policy		1
+	option	acct_status		0
+	option	total_seconds	60
+	option	total_flows		100

@@ -52,18 +52,17 @@ enum msg_cmd_en {
     MSG_CMD_AS_BLACKLIST_ADD            = MSG_CMD_AS_START + 3, /*app --> kernel*/
     MSG_CMD_AS_BLACKLIST_DELETE         = MSG_CMD_AS_START + 4, /*app --> kernel*/
     MSG_CMD_AS_BLACKLIST_QUERY          = MSG_CMD_AS_START + 5, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_ADD          = MSG_CMD_AS_START + 6, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_DELETE       = MSG_CMD_AS_START + 7, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_QUERY        = MSG_CMD_AS_START + 8, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_POLICY_SET   = MSG_CMD_AS_START + 9, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_POLICY_QUERY = MSG_CMD_AS_START + 10,/*app --> kernel*/
-    MSG_CMD_AS_PORTAL_URL_SET           = MSG_CMD_AS_START + 11,/*app --> kernel*/
-    MSG_CMD_AS_PORTAL_URL_QUERY         = MSG_CMD_AS_START + 12,/*app --> kernel*/
-    MSG_CMD_AS_INNER_INTERFACE_SET      = MSG_CMD_AS_START + 13,/*app --> kernel*/
-    MSG_CMD_AS_INNER_INTERFACE_QUERY    = MSG_CMD_AS_START + 14,/*app --> kernel*/
-    MSG_CMD_AS_OUTER_INTERFACE_SET      = MSG_CMD_AS_START + 15,/*app --> kernel*/
-    MSG_CMD_AS_OUTER_INTERFACE_QUERY    = MSG_CMD_AS_START + 16,/*app --> kernel*/
-    MSG_CMD_AS_END                      = MSG_CMD_AS_START + 17,
+    MSG_CMD_AS_WHITELIST_ADD            = MSG_CMD_AS_START + 6, /*app --> kernel*/
+    MSG_CMD_AS_WHITELIST_DELETE         = MSG_CMD_AS_START + 7, /*app --> kernel*/
+    MSG_CMD_AS_WHITELIST_QUERY          = MSG_CMD_AS_START + 8, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_ADD          = MSG_CMD_AS_START + 9, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_DELETE       = MSG_CMD_AS_START + 10,/*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_QUERY        = MSG_CMD_AS_START + 11,/*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_POLICY_SET   = MSG_CMD_AS_START + 12,/*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_POLICY_QUERY = MSG_CMD_AS_START + 13,/*app --> kernel*/
+    MSG_CMD_AS_PORTAL_ADD               = MSG_CMD_AS_START + 14,/*app --> kernel*/
+    MSG_CMD_AS_PORTAL_DELETE            = MSG_CMD_AS_START + 15,/*app --> kernel*/
+    MSG_CMD_AS_END                      = MSG_CMD_AS_START + 16,
 };
 
 
@@ -82,6 +81,7 @@ enum error_code {
 	ERR_CODE_UNSUPPORTED,
 	ERR_CODE_OPERATE_ADD,
 	ERR_CODE_OPERATE_DELETE,
+	ERR_CODE_OPERATE_UPDATE,
 	ERR_CODE_OPERATE_QUERY,
 };
 

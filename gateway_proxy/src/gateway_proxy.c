@@ -41,6 +41,19 @@ enum task_id {
 
 
 static int pipefd[2];
+static LIST_HEAD(query_user_list);
+pthread_mutex_t query_mutex;
+pthread_mutex_t text_mutex;
+pthread_mutex_t authing_mutex;
+
+typedef struct portal_cfg_st{
+    int32 apply;/*0:interface; 1:vlan*/
+    union {
+        int8 ifname[IFNAME_SIZE];
+        uint16 vlan_id;
+    };
+    int8 url[URL_SIZE];
+}portal_cfg_t;
 
 //char * http_post(const char *url,const char * post_str);  
 //extern cJSON *cJSON_Parse(const char *value);
@@ -98,6 +111,8 @@ typedef struct advertising_policy_st{
 
 static gateway_info_t gateway;
 static LIST_HEAD(tel_text_users);    /*通信对端模块信息*/
+static LIST_HEAD(authing_users); 
+
 
 typedef struct token_info_st{
 	char token_val[64];
@@ -153,7 +168,7 @@ int get_token()
 {
 	char *back_str = NULL;
 	char cmd_token[1024] = {0};
-	int rlen = 0, ret = -1;
+	int ret = -1, rlen = 0;
 	cJSON *obj = NULL;
 	back_str = (char*)malloc(4096);
 	gw_token.token_time = time(NULL);
@@ -186,11 +201,23 @@ out:
 	return ret;
 }
 
+int query_list_clear()
+{
+	user_query_info_t *p= NULL, *n = NULL;
+	pthread_mutex_lock(&query_mutex);
+	list_for_each_entry_safe(p, n, &query_user_list, user_list) {
+		printf("q del\n");
+		list_del(&p->user_list);
+		free(p);
+	}
+	pthread_mutex_unlock(&query_mutex);
+	return 0;
+}
 
 int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
 {
 
-	int ret = -1, rlen = 0;
+	int ret = -1;
 	cJSON *root = NULL, *obj = NULL;
 	char url[128] = {0};
 	root = cJSON_CreateObject();
@@ -199,23 +226,31 @@ int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, in
 		get_token();
 
 	user_query_info_t *user_info = (user_query_info_t *)ibuf;
-	
+	user_query_info_t *p;
+
+	pthread_mutex_lock(&query_mutex);
+	list_for_each_entry(p, &query_user_list, user_list) {
+		if (strcmp(user_info->mac, p->mac) == 0 && user_info->auth_type == p->auth_type) {
+			memcpy(obuf, p, sizeof(user_query_info_t));
+			*olen = sizeof(user_query_info_t);
+			ret = 0;
+			pthread_mutex_unlock(&query_mutex);
+			goto out;
+		}
+	}
+	pthread_mutex_unlock(&query_mutex);
 	cJSON_AddStringToObject(root, "userMac", user_info->mac);
 	
-	cJSON_AddNumberToObject(root, "userType", 1);
+	cJSON_AddNumberToObject(root, "userType", user_info->auth_type);
 
 	snprintf(url, sizeof(url) - 1, "%s%d/%s", USER_QUERY_URL, 
 		gw_token.token_time, gw_token.token_val);
-	if ((ret = http_send(url, root, &obj)))
-		goto out;
+	ret = http_send(url, root, &obj);
 	
-	cJSON *result = cJSON_GetObjectItem(obj, "result");
-	if (!result)
-		goto out;
 	user_query_info_t *qu = (user_query_info_t *)obuf;
 	memcpy(qu, user_info, sizeof(user_query_info_t));
-	qu->if_exist = result->valueint;
-	if (!result->valueint) {
+	qu->if_exist = ret;
+	if (!ret) {
 		cJSON *data = cJSON_GetObjectItem(obj, "data");
 		if (!data && !data->child)
 			goto out;
@@ -230,6 +265,22 @@ int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, in
 		strncpy(qu->mac, umac->valuestring, sizeof(qu->mac) - 1);
 		strncpy(qu->username, uname->valuestring, sizeof(qu->username) - 1);
 		strncpy(qu->password, upassword->valuestring, sizeof(qu->password) - 1);
+		user_query_info_t *query_cache = malloc(sizeof(user_query_info_t));
+		memcpy(query_cache, qu, sizeof(user_query_info_t));
+		pthread_mutex_lock(&query_mutex);
+		list_add(&query_cache->user_list, &query_user_list);
+		printf("q add\n");
+		pthread_mutex_unlock(&query_mutex);
+	} else if (ret == 1) {
+		strncpy(qu->mac, user_info->mac, sizeof(qu->mac) - 1);
+		qu->auth_type = user_info->auth_type;
+		user_query_info_t *query_cache = malloc(sizeof(user_query_info_t));
+		memcpy(query_cache, qu, sizeof(user_query_info_t));
+		pthread_mutex_lock(&query_mutex);
+		list_add(&query_cache->user_list, &query_user_list);
+		pthread_mutex_unlock(&query_mutex);
+	} else {
+		goto out;
 	}
 	*olen = sizeof(user_query_info_t);
 	ret = 0;
@@ -246,21 +297,22 @@ out:
 int32 user_register_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
 {
 
-	int ret = -1, rlen = 0, matched = 0;
+	int ret = -1, matched = 0;
 	cJSON *root = NULL, *obj = NULL;
 	char url[128] = {0};
 	user_query_info_t *user_info = ibuf;
 	user_query_info_t *p = NULL, *n = NULL;
+	pthread_mutex_lock(&text_mutex);
 	list_for_each_entry_safe(p, n, &tel_text_users, user_list) {
-		if (strcmp(user_info->username, p->username) == 0) {
-			if (strcmp(user_info->password, p->password) == 0) {
-				matched = 1;
-				list_del(&p->user_list);
-				free(p);
-				break;
-			}	
+		if (strcmp(user_info->username, p->username) == 0 && 
+				strcmp(user_info->password, p->password) == 0) {
+			matched = 1;
+			list_del(&p->user_list);
+			free(p);
+			break;
 		}
 	}
+	pthread_mutex_unlock(&text_mutex);
 	if (!matched)
 		goto out;
 	root = cJSON_CreateObject();
@@ -283,7 +335,18 @@ int32 user_register_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	cJSON *result = cJSON_GetObjectItem(obj, "result");
 	if (!result || result->valueint)
 		goto out;
+
+	pthread_mutex_lock(&query_mutex);
+	list_for_each_entry_safe(p, n, &query_user_list, user_list) {
+		if (strcmp(user_info->mac, p->mac) == 0 && user_info->auth_type == p->auth_type) {
+			list_del(&p->user_list);
+			free(p);
+		}
+	}
+	pthread_mutex_unlock(&query_mutex);
+	
 	ret = msg_send_syn(MSG_CMD_RADIUS_USER_AUTH, user_info, sizeof(user_query_info_t), NULL,0);
+
 	*olen = 0;
 out:
 	if (root)
@@ -345,6 +408,8 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	snprintf(need_verify->password, sizeof(need_verify->password) - 1, "%6d", verify_code);
 	user_query_info_t *p = NULL;
 	int matched = 0;
+
+	pthread_mutex_lock(&text_mutex);
 	list_for_each_entry(p, &tel_text_users, user_list) {
 		if (strcmp(p->username, need_verify->username) == 0) {
 			strcpy(p->password, need_verify->password);
@@ -355,6 +420,7 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	}
 	if (!matched)
 		list_add(&need_verify->user_list, &tel_text_users);
+	pthread_mutex_unlock(&text_mutex);
 	
 out:
 	if (jstr)
@@ -576,6 +642,7 @@ int send_heart_beat()
 	if (!gw_token.if_lgoin)
 		get_token();
 	gateway_info_update();
+	query_list_clear();
 	w_pid = waitpid(-1, &status, WNOHANG);
 	printf("wait pid hhhhhhhhhhhhhhhhhhhhhhhhhhhh = %d\n", w_pid);
 	root = cJSON_CreateObject();
@@ -709,21 +776,47 @@ int gateway_info_update()
 	return 0;
 }
 
-unsigned int black_mac[6] = {0};
+unsigned int black_white_mac[6] = {0};
 
-void black_list_add_send()
+void black_white_list_add_send()
 {
-	str2mac("02:81:76:f8:69:c2", black_mac);
-	if (msg_send_syn( MSG_CMD_AS_BLACKLIST_ADD, black_mac, sizeof(black_mac), NULL, NULL) != 0) {
+	char **array = NULL;
+	int num = 0, i = 0;
+	if (!uuci_get("acct_config.total_config.black_white_enable", &array, &num)) {
+		int enable = atoi(array[0]);
+		uuci_get_free(array, num);
+		if (!enable)
+			return;
+	}
+	
+	if (!uuci_get("acct_config.black_list.black", &array, &num)) {
+		for(i = 0; i < num; i++) {
+			str2mac(array[i], black_white_mac);
+			if (msg_send_syn( MSG_CMD_AS_BLACKLIST_ADD, black_white_mac, sizeof(black_white_mac), NULL, NULL) != 0) {
 			printf("MSG_CMD_AS_BLACKLIST_ADD err\n ");
-		}else {
-			printf("black add success\n");
+			}else {
+				printf("black add success\n");
 			}
+		}
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.white_list.white", &array, &num)) {
+		for(i = 0; i < num; i++) {
+			str2mac(array[i], black_white_mac);
+			if (msg_send_syn( MSG_CMD_AS_WHITELIST_ADD, black_white_mac, sizeof(black_white_mac), NULL, NULL) != 0) {
+			printf("MSG_CMD_AS_WhiteLIST_ADD err\n ");
+			}else {
+				printf("white add success\n");
+			}
+		}
+		uuci_get_free(array, num);
+	}
+		
 }
 
 void black_list_del_send()
 {
-	if (msg_send_syn( MSG_CMD_AS_BLACKLIST_DELETE, black_mac, sizeof(black_mac), NULL, NULL) != 0) {
+	if (msg_send_syn( MSG_CMD_AS_BLACKLIST_DELETE, black_white_mac, sizeof(black_white_mac), NULL, NULL) != 0) {
 			printf("MSG_CMD_AS_BLACKLIST_DELETE err\n ");
 		}else {
 			printf("black delete success\n");
@@ -731,27 +824,49 @@ void black_list_del_send()
 }
 
 advertising_cfg_t temp_adv;
-int tempid = 1;
 void add_advertise()
 {
-	temp_adv.id = ++tempid;
-	temp_adv.type = 1;
-	snprintf(temp_adv.url, sizeof(temp_adv.url), "http://%s/portal/test.html", gateway.lan_ip);
-	int tp_size = tempid%5, i = 0;
-	tp_size+=3;
-	advertising_cfg_t *temp_adv2 = malloc(sizeof(advertising_cfg_t) * tp_size);
-	for (i = 0;i < tp_size; i++) {
-		memcpy(&temp_adv2[i], &temp_adv, sizeof(temp_adv));
+	char **array = NULL;
+	char *res;
+	int num = 0, i = 0;
+	int adv_size = 0;
+	if (!uuci_get("acct_config.total_config.advertise_enable", &array, &num)) {
+		int enable = atoi(array[0]);
+		uuci_get_free(array, num);
+		if (!enable)
+			return;
 	}
-		
-	if (msg_send_syn( MSG_CMD_AS_ADVERTISING_ADD, temp_adv2, sizeof(advertising_cfg_t) * tp_size, NULL, NULL) != 0) {
-			printf("MSG_CMD_AS_ADVERTISING_ADD err\n ");
-		}else {
-			printf("adv add success\n");
+	if (!uuci_get("acct_config.total_config.advertise_size", &array, &num)) {
+		adv_size = atoi(array[0]);
+		uuci_get_free(array, num);
+		char str[64] = {0};
+		for (i = 0; i < adv_size; i++) {
+			snprintf(str, sizeof(str) - 1, "acct_config.@advertise[%d].id", i);
+			if (!uuci_get(str, &array, &num)) {
+				temp_adv.id = atoi(array[0]);
+				uuci_get_free(array, num);
 			}
-	free(temp_adv2);
+			snprintf(str, sizeof(str) - 1, "acct_config.@advertise[%d].type", i);
+			if (!uuci_get(str, &array, &num)) {
+				temp_adv.type = atoi(array[0]);
+				uuci_get_free(array, num);
+			}
+			snprintf(str, sizeof(str) - 1, "acct_config.@advertise[%d].url", i);
+			if (!uuci_get(str, &array, &num)) {
+				snprintf(temp_adv.url, sizeof(temp_adv.url) - 1, "http://%s/%s", gateway.lan_ip, array[0]);
+				uuci_get_free(array, num);
+			}
+			if (msg_send_syn( MSG_CMD_AS_ADVERTISING_ADD, &temp_adv, sizeof(advertising_cfg_t), NULL, NULL) != 0) {
+				printf("MSG_CMD_AS_ADVERTISING_ADD err\n ");
+			}else {
+				printf("adv add success\n");
+			}
+		}
+	}
+	set_adv_policy();
 }
 
+int tempid;
 void delete_advertise()
 {
 	temp_adv.id = tempid;
@@ -792,20 +907,35 @@ int temp_ssss = 0;
 
 void set_adv_policy()
 {
-	temp_ssss++;
-	temp_policy.flow_interval = 1024*1024*30;
-	if (temp_ssss%2 == 0)
-		temp_policy.option = ADS_OPTION_RANDOM;
-	else
-		temp_policy.option = ADS_OPTION_LOOPING;
-	temp_policy.policy = ADS_POLICY_TIME_INTERVAL;
-	temp_policy.type = 1;
-	temp_policy.time_interval = 10;
+	char **array = NULL;
+	char *res;
+	int num = 0;
+	if (!uuci_get("acct_config.adv_config.adv_policy", &array, &num)) {
+		temp_policy.policy = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.adv_config.adv_option", &array, &num)) {
+		temp_policy.option = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.adv_config.adv_type", &array, &num)) {
+		temp_policy.type = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.adv_config.time_interval", &array, &num)) {
+		temp_policy.time_interval= simple_strtoull(array[0], &res, 10);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.adv_config.flow_interval", &array, &num)) {
+		temp_policy.flow_interval= simple_strtoull(array[0], &res, 10);
+		uuci_get_free(array, num);
+	}
+
 	if (msg_send_syn( MSG_CMD_AS_ADVERTISING_POLICY_SET, &temp_policy, sizeof(temp_policy), NULL, NULL) != 0) {
 			printf("MSG_CMD_AS_ADVERTISING_POLICY_SET err\n ");
 		}else {
-			printf("policy set success\n");
-			}
+			printf("adv_policy set success\n");
+		}
 }
 
 void query_adv_policy()
@@ -814,19 +944,45 @@ void query_adv_policy()
 	advertising_policy_t *res_policy = NULL;
 	if (msg_send_syn( MSG_CMD_AS_ADVERTISING_POLICY_QUERY, NULL, 0, &res_policy, &policy_size) != 0) {
 			printf("MSG_CMD_AS_ADVERTISING_POLICY_QUERY err\n ");
-		}else {
+	}else {
 			printf("policy query success policy_oprion = %d\n", res_policy->option);
 			free_rcv_buf(res_policy);
 			
-			}
+	}
 } 
+
+int portal_url_set()
+{
+	portal_cfg_t portal;
+	portal.apply = 1;
+	portal.vlan_id = 3;
+	snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.lan_ip);
+	
+	if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
+		printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+	}else {
+		printf("MSG_CMD_AS_PORTAL_URL_SET success \n");
+	}
+	portal.apply = 1;
+	portal.vlan_id = 1;
+	snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.lan_ip);
+	
+	if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
+		printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+	}else {
+		printf("MSG_CMD_AS_PORTAL_URL_SET success \n");
+	}
+
+}
 
 int main (int argc, char **argv)
 {
 	
 	int ret = 0, i = 0;
 	gateway_info_init();
-	
+	pthread_mutex_init(&query_mutex, NULL);
+	pthread_mutex_init(&text_mutex, NULL);
+	pthread_mutex_init(&authing_mutex, NULL);
 	ret = socketpair(PF_UNIX, SOCK_STREAM, 0, pipefd);
 	if (ret == -1)
 		return -1;
@@ -846,6 +1002,9 @@ int main (int argc, char **argv)
 	fd_set fds;
 	int max_fd = 0;
 	add_timer(send_heart_beat, 2, 1, 60);
+	portal_url_set();
+	black_white_list_add_send();
+	add_advertise();
 //	add_timer(gateway_info_update, 1, 1, 5);
 	while (1) {
 //		gateway_info_update();
