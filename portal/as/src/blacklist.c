@@ -248,8 +248,8 @@ static ssize_t blacklist_read(struct file *file,
     if (unlikely(&s_list_blacklist == head))
     {
         len = sprintf(tmp, "max:%u, count:%u\n", s_maxcount, s_count);
-        len += sprintf(tmp+len, "%-16s%-32s%-32s\n", 
-                    "mac", "u-pkts", "d-pkts");
+        len += sprintf(tmp+len, "%s  %s  %s\n", 
+                    "mac", "uplink-pkts", "downlink-pkts");
         if (len > *ppos)
         {
             len = ((len - *ppos) > size) ? size : len;
@@ -262,7 +262,7 @@ static ssize_t blacklist_read(struct file *file,
         if (unlikely(head->next == &s_list_blacklist))
             break;
         black = list_first_entry(head, blacklist_t, list);
-        len = sprintf(tmp, MACSTR" %-32llu%-32llu\n", 
+        len = sprintf(tmp, MACSTR"  %llu  %llu\n", 
                 MAC2STR(black->mac), 
                 black->stats.uplink_pkts, 
                 black->stats.downlink_pkts);
@@ -301,16 +301,10 @@ static struct file_operations s_blacklist_fileops = {
 };
 int32 blacklist_proc_init(struct proc_dir_entry *parent)
 {
-#ifdef KERNEL_4_4_7
     struct proc_dir_entry *entry = proc_create(PROC_BLACKLIST, 0, parent, &s_blacklist_fileops);
-#elif defined KERNEL_3_2_88
-    struct proc_dir_entry *entry = create_proc_entry(PROC_BLACKLIST, 0, parent);
-#else
-    #error "undefined kernel version"
-#endif
     if (NULL == entry)
     {
-        DB_ERR("proc_mkdir(%s) fail!!", PROC_BLACKLIST);
+        DB_ERR("proc_create(%s) fail!!", PROC_BLACKLIST);
         return -1;
     }
     sp_proc_blacklist = entry;

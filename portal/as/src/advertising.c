@@ -5,6 +5,8 @@
 #include "debug.h"
 #include "time.h"
 #include "log.h"
+#include "http.h"
+
 #include <linux/ip.h>
 #include <linux/if_ether.h>
 #include <linux/tcp.h>
@@ -135,7 +137,7 @@ int32 advertising_add(advertising_t *ads)
                 if (unlikely(ads2->id >= ads->id))
                     break;
             }
-            if (unlikely(&ads2->list != &s_ads_list.list_ads_push))
+            if (unlikely(NULL != ads2 && &ads2->list != &s_ads_list.list_ads_push))
             {
                 if (likely(ads2->id == ads->id))
                 {
@@ -177,7 +179,7 @@ int32 advertising_add(advertising_t *ads)
                 if (unlikely(ads2->id >= ads->id))
                     break;
             }
-            if (unlikely(&ads2->list != &s_ads_list.list_ads_embed))
+            if (unlikely(NULL != ads2 && &ads2->list != &s_ads_list.list_ads_embed))
             {
                 if (likely(ads2->id == ads->id))
                 {
@@ -282,7 +284,7 @@ advertising_t *advertising_search(const uint32 id,
                 if (ads->id >= id)
                     break;
             }
-            if (&ads->list != &s_ads_list.list_ads_push)
+            if (NULL != ads && &ads->list != &s_ads_list.list_ads_push)
             {
                 if (id == ads->id)
                     atomic_inc(&ads->refcnt);
@@ -301,7 +303,7 @@ advertising_t *advertising_search(const uint32 id,
                 if (ads->id >= id)
                     break;
             }
-            if (&ads->list != &s_ads_list.list_ads_embed)
+            if (NULL != ads && &ads->list != &s_ads_list.list_ads_embed)
             {
                 if (id == ads->id)
                     atomic_inc(&ads->refcnt);
@@ -364,7 +366,7 @@ static advertising_t *advertising_next(const uint32 id,
                     if (ads->id >= id)
                         break;
                 }
-                if (&ads->list != &s_ads_list.list_ads_push)
+                if (NULL != ads && &ads->list != &s_ads_list.list_ads_push)
                 {
                     if (id == ads->id)
                         ads = container_of(ads->list.next, advertising_t, list);
@@ -386,7 +388,7 @@ static advertising_t *advertising_next(const uint32 id,
                     if (ads->id >= id)
                         break;
                 }
-                if (&ads->list != &s_ads_list.list_ads_embed)
+                if (NULL != ads && &ads->list != &s_ads_list.list_ads_embed)
                 {
                     if (id == ads->id)
                         ads = container_of(ads->list.next, advertising_t, list);
@@ -466,19 +468,10 @@ int32 advertising_redirect(struct sk_buff *skb,
                            uint32 *latestid,
                            int32 type)
 {
-    int32 buff_len, tcph_len, iph_len;
-    uint32 tcp_dlen;
-    __wsum tcph_csum;
-    struct ethhdr *ethh;
-    struct iphdr *iph;
-    struct tcphdr *tcph;
-    struct sk_buff *skb2;
-    uint32 skb2_size;
-    struct ethhdr *ethh2;
-    struct iphdr *iph2;
-    struct tcphdr *tcph2;
-    uint8 redirect_buf[512];
     int32 ret;
+    struct sk_buff *nskb = NULL;
+    int8 http_data[512];
+    uint32 http_dlen = 0;
     advertising_t *ads = NULL;
 
     if (FALSE == s_ads_list.inited || NULL == skb)
@@ -486,15 +479,16 @@ int32 advertising_redirect(struct sk_buff *skb,
     ads = advertising_select(*latestid, type);
     if (NULL == ads)
         return -1;
-
-    ethh = eth_hdr(skb);
-    iph = ip_hdr(skb);
-    iph_len = iph->ihl * 4;
-    tcph = (struct tcphdr *)(skb->data + iph_len);
-    tcph_len = tcph->doff * 4;
-    tcp_dlen = ntohs(iph->tot_len) - iph_len - tcph_len;
-        
-    buff_len = sprintf(redirect_buf,
+    
+    ret = http_ack_reply(skb);
+    if (0 != ret)
+    {
+        advertising_put(ads);
+        DB_ERR("http_ack_reply() call fail.");
+        return ret;
+    }
+    /*只针对非IOS设备,IOS设备需后续再作扩展*/
+    http_dlen = sprintf(http_data,
                        "HTTP/1.1 302 Found\r\n"
                        "Location: %s\r\n"
                        "Content-Type: text/plain\r\n"
@@ -503,79 +497,22 @@ int32 advertising_redirect(struct sk_buff *skb,
                        "Content-Length: 0\r\n"
                        "\r\n",
                        ads->url);
-
-    skb2_size = buff_len + sizeof(*ethh2) + sizeof(*iph2) + sizeof(*tcph2);
-    skb2 = alloc_skb(skb2_size, GFP_KERNEL);
-    if (NULL == skb2)
+    nskb = http_skb_alloc(skb, http_dlen);
+    if (NULL == nskb)
     {
-        advertising_put(ads); /*need put ads*/
-        DB_ERR("alloc_skb() fail.");
+        advertising_put(ads);
+        DB_ERR("http_skb_alloc() call fail.");
         return -1;
     }
-    skb_put(skb2, skb2_size);
-    skb_reset_mac_header(skb2);
-    skb_pull(skb2, sizeof(*ethh2));
-    skb_reset_network_header(skb2);
-    skb_pull(skb2, sizeof(*iph2));
-    skb_reset_transport_header(skb2);
-    skb_pull(skb2, sizeof(*tcph2));
-    skb2->dev = skb->dev;
-    skb2->protocol = skb->protocol;
-
-    ethh2 = eth_hdr(skb2);
-    memcpy(ethh2->h_source, ethh->h_dest, sizeof(ethh2->h_source));
-    memcpy(ethh2->h_dest, ethh->h_source, sizeof(ethh2->h_dest));
-    ethh2->h_proto = ethh->h_proto;
-    
-    iph2            = ip_hdr(skb2);
-    iph2->ihl       = sizeof(*iph2) >> 2;
-    iph2->version   = 4;
-    iph2->tos       = 0;
-    iph2->tot_len   = htons(buff_len + sizeof(*iph2) + sizeof(*tcph2));
-    iph2->id        = htons(0);
-    iph2->frag_off  = htons(IP_DF);
-    iph2->ttl       = iph->ttl;
-    iph2->protocol  = IPPROTO_TCP;
-    iph2->check     = 0;
-    iph2->saddr     = iph->daddr;
-    iph2->daddr     = iph->saddr;
-
-    tcph2           = tcp_hdr(skb2);
-    tcph2->source   = tcph->dest;
-    tcph2->dest     = tcph->source;
-    tcph2->ack_seq  = htonl(ntohl(tcph->seq) + tcp_dlen);
-    tcph2->seq      = tcph->ack_seq;
-    tcph2->doff     = sizeof(*tcph2) >> 2;
-    tcph2->res1     = 0;
-    tcph2->cwr      = 0;
-    tcph2->ece      = 0;
-    tcph2->urg      = 0;
-    tcph2->ack      = 1;
-    tcph2->psh      = 1;
-    tcph2->rst      = 0;
-    tcph2->syn      = 0;
-    tcph2->fin      = 0;
-    tcph2->check    = 0;
-    tcph2->urg_ptr  = 0;
-
-    memcpy(skb2->data, redirect_buf, buff_len);
-    
-    skb_push(skb2, sizeof(*tcph2));
-    skb_push(skb2, sizeof(*iph2));
-    skb_push(skb2, sizeof(*ethh2));
-
-    ip_send_check(iph2);
-    tcph_csum = csum_partial((void *)tcph2, (sizeof(*tcph2) + buff_len), 0);
-    tcph2->check = 0;
-    tcph2->check = csum_tcpudp_magic(iph2->saddr, iph2->daddr, (sizeof(*tcph2) + buff_len), IPPROTO_TCP, tcph_csum);
-
-    ret = dev_queue_xmit(skb2);
+    http_transport_header_fill(nskb, skb, http_data, http_dlen, FALSE, TRUE, TRUE, FALSE);
+    http_network_header_fill(nskb, skb, sizeof(struct tcphdr) + http_dlen);
+    http_mac_header_fill(nskb, skb);
+    ret = http_skb_xmit(nskb);
     if (0 != ret)
     {
-        advertising_put(ads); /*need put ads*/
-        DB_ERR("dev_queue_xmit() call fail. errno:%d.", ret);
-        kfree_skb(skb2);
-        return -1;
+        advertising_put(ads);
+        DB_ERR("http_skb_xmit() call fail.");
+        return ret;
     }
     *latestid = ads->id;
     LOGGING_INFO("Advertising redirect successfully. id[%u], url[%s].", ads->id, ads->url);
@@ -800,50 +737,32 @@ static struct file_operations s_ads_policy_fileops = {
 
 int32 advertising_proc_init(struct proc_dir_entry *parent)
 {
-#ifdef KERNEL_4_4_7
     struct proc_dir_entry *entry = proc_create(PROC_ADVERTISING_PUSH, 0, parent, &s_ads_push_fileops);
-#elif defined KERNEL_3_2_88
-    struct proc_dir_entry *entry = create_proc_entry(PROC_ADVERTISING_PUSH, 0, parent);
-#else
-    #error "undefined kernel version"
-#endif
     if (NULL == entry)
     {
-        DB_ERR("proc_mkdir(%s) fail!!", PROC_ADVERTISING_PUSH);
+        DB_ERR("proc_create(%s) fail!!", PROC_ADVERTISING_PUSH);
         return -1;
     }
     sp_proc_advertising_push = entry;
     
-#ifdef KERNEL_4_4_7
     entry = proc_create(PROC_ADVERTISING_EMBED, 0, parent, &s_ads_embed_fileops);
-#elif defined KERNEL_3_2_88
-    entry = create_proc_entry(PROC_ADVERTISING_EMBED, 0, parent);
-#else
-    #error "undefined kernel version"
-#endif
     if (NULL == entry)
     {
         remove_proc_entry(PROC_ADVERTISING_PUSH, parent);
         sp_proc_advertising_push = NULL;
-        DB_ERR("proc_mkdir(%s) fail!!", PROC_ADVERTISING_EMBED);
+        DB_ERR("proc_create(%s) fail!!", PROC_ADVERTISING_EMBED);
         return -1;
     }
     sp_proc_advertising_embed = entry;
     
-#ifdef KERNEL_4_4_7
     entry = proc_create(PROC_ADVERTISING_POLICY, 0, parent, &s_ads_policy_fileops);
-#elif defined KERNEL_3_2_88
-    entry = create_proc_entry(PROC_ADVERTISING_POLICY, 0, parent);
-#else
-    #error "undefined kernel version"
-#endif
     if (NULL == entry)
     {
         remove_proc_entry(PROC_ADVERTISING_PUSH, parent);
         sp_proc_advertising_push = NULL;
         remove_proc_entry(PROC_ADVERTISING_EMBED, parent);
         sp_proc_advertising_embed = NULL;
-        DB_ERR("proc_mkdir(%s) fail!!", PROC_ADVERTISING_POLICY);
+        DB_ERR("proc_create(%s) fail!!", PROC_ADVERTISING_POLICY);
         return -1;
     }
     sp_proc_advertising_policy = entry;

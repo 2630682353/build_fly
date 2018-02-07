@@ -49,7 +49,8 @@ int shell_printf(char *cmd, char *dst, int dlen)
 	if ((fp = popen(cmd, "r")) == NULL)
 		return IGD_ERR_NO_RESOURCE;
 	rlen = fread(dst, sizeof(char), dlen - 1, fp);
-	dst[dlen-1] = 0;
+//	dst[dlen-1] = 0;
+	dst[rlen] = 0;
 
 	pclose(fp);
 	return rlen;

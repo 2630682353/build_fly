@@ -12,6 +12,7 @@
 #include <linux/types.h>
 #include <net/sock.h>
 #include <linux/netlink.h>
+#include <linux/kthread.h> 
 #include <linux/wait.h>
 #include <asm/param.h>
 #include "message.h"
@@ -31,7 +32,8 @@ extern struct net init_net;
 static struct mutex event_mutex;
 static struct mutex umsg_mutex;
 static struct mutex cmd_list_mutex;
-static struct mutex wait_list_mutex;
+//static struct mutex wait_list_mutex;
+static spinlock_t wait_list_lock;
 atomic_t v = ATOMIC_INIT(0);
 
 
@@ -203,13 +205,13 @@ static void event_rcv_msg(struct sk_buff *skb)
     {
         nlh = nlmsg_hdr(skb);
         rcv_msg = NLMSG_DATA(nlh);
-		mutex_lock(&wait_list_mutex);
+		spin_lock(&wait_list_lock);
 		tq = get_task_queue(rcv_msg->sn);
 		if (tq) {
 			tq->rcv_skb = skb_get(skb);	
 			wake_up_interruptible(&tq->waitq);
 		}	
-		mutex_unlock(&wait_list_mutex);
+		spin_unlock(&wait_list_lock);
     }
 }
 
@@ -238,8 +240,6 @@ int msg_send_syn(int32 cmd, void *sbuf, int slen, void **obuf, int *olen)
     int ret = -1, len = 0, grp = 0;
 	msg_t *snd_msg = NULL;
 	int msg_len = 0;
-	*obuf = NULL;
-	*olen = 0;
 	if (MODULE_TYPE_GET(cmd) == KERNEL_MODULE) {
 		msg_module_cmd_t *msg_cmd = msg_get_cmdfunc(cmd);
 		if (!msg_cmd) {
@@ -295,9 +295,9 @@ int msg_send_syn(int32 cmd, void *sbuf, int slen, void **obuf, int *olen)
 	tq->sn = msg->sn;
 	tq->rcv_skb = NULL;
 	init_waitqueue_head(&tq->waitq);
-	mutex_lock(&wait_list_mutex);
+	spin_lock(&wait_list_lock);
 	list_add_tail(&tq->list, &wait_queue_list);
-	mutex_unlock(&wait_list_mutex);
+	spin_unlock(&wait_list_lock);
 	
     memcpy(nlmsg_data(nlh) + sizeof(msg_t), sbuf, slen);
 	grp = MODULE_GET(cmd);
@@ -319,21 +319,28 @@ int msg_send_syn(int32 cmd, void *sbuf, int slen, void **obuf, int *olen)
 	if (tq->rcv_skb != NULL) {
 		rcv_msg = NLMSG_DATA(nlmsg_hdr(tq->rcv_skb));
 		ret = rcv_msg->result;
-		if (rcv_msg->result == 0) {			
+		if (rcv_msg->result == 0 && obuf != NULL && olen != NULL && rcv_msg->dlen != 0) {			
 			*obuf = rcv_msg->data;
 			*olen = rcv_msg->dlen;
 			*(struct sk_buff **)(*obuf-sizeof(void *)) = tq->rcv_skb;		
 		} 
 	}
-	 
 out:
+	if (ret != 0 || obuf == NULL || olen == NULL || (rcv_msg && rcv_msg->dlen == 0)) {
+		if (tq && tq->rcv_skb)
+			kfree_skb(tq->rcv_skb);
+		if (obuf)
+			*obuf = NULL;
+		if (olen)
+			*olen = 0;
+	}
 	if (tq) {
-		mutex_lock(&wait_list_mutex);
+		spin_lock(&wait_list_lock);
 		list_del(&tq->list);
 		remove_wait_queue(&tq->waitq, &wait);
 		kfree(tq);
 		tq = NULL;
-		mutex_unlock(&wait_list_mutex);
+		spin_unlock(&wait_list_lock);
 	}
 	if (nl_skb) 
 		nlmsg_free(nl_skb);
@@ -357,10 +364,8 @@ int test_netlink_init(void)
         return -1; 
     }   
 	
-//	mutex_init(&event_mutex);
-//	mutex_init(&umsg_mutex);
 	mutex_init(&cmd_list_mutex);
-	mutex_init(&wait_list_mutex);
+	spin_lock_init(&wait_list_lock);
 		
     return 0;
 }
@@ -376,10 +381,9 @@ void test_netlink_exit(void)
         netlink_kernel_release(umsg_sock); /* release ..*/
         umsg_sock = NULL;
     }  
-//	mutex_destroy(&event_mutex);
-//	mutex_destroy(&umsg_mutex);
+
 	mutex_destroy(&cmd_list_mutex);
-	mutex_destroy(&wait_list_mutex);
+
     printk("test_netlink_exit!\n");
 }
 

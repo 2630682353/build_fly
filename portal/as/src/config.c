@@ -1,14 +1,27 @@
 #include "config.h"
-//#include "type.h"
 #include "message.h"
 #include "debug.h"
 #include "advertising.h"
 #include "authenticated.h"
 #include "blacklist.h"
 #include "def.h"
+#include "portal.h"
 
 #include <linux/kthread.h>
 #include <linux/delay.h>
+
+static void config_error(void *buf,
+                         int32 *size,
+                         int8 *fmt, ...)
+{
+    if (NULL != buf && NULL != size && *size > 0)
+    {
+        va_list va;
+        va_start(va, fmt);
+        *size = vsnprintf(buf, *size, fmt, va);
+        va_end(va);
+    }
+}
 
 typedef struct advertising_cfg_st{
     uint32 id;
@@ -16,59 +29,170 @@ typedef struct advertising_cfg_st{
     int8 url[URL_SIZE];
 }advertising_cfg_t;
 
-static inline int32 config_advertising_add(advertising_cfg_t *cfg)
+static int32 config_advertising_add(const int32 cmd,
+                                    void *ibuf,
+                                    int32 ilen,
+                                    void *obuf,
+                                    int32 *olen)
 {
     advertising_t ads;
+    advertising_cfg_t *cfg;
+    int32 ret;
+    if (ilen < sizeof(*cfg))
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    cfg = (advertising_cfg_t *)ibuf;
     DB_PARAM("advertising: id[%u],type[%d],url[%s].", cfg->id, cfg->type, cfg->url);
     bzero(&ads, sizeof(ads));
     ads.id = cfg->id;
     ads.type = cfg->type;
     memcpy(ads.url, cfg->url, sizeof(ads.url));
-    return advertising_add(&ads);
+    ret = advertising_add(&ads);
+    if (0 != ret)
+    {
+        DB_ERR("config_advertising_add() fail. cmd[0x%x], id[%u], type[%d], url[%s].", 
+                cmd, cfg->id, cfg->type, cfg->url);
+        config_error(obuf, olen, "Add advertising fail. cmd[0x%x], id[%u], type[%d], url[%s].", 
+                cmd, cfg->id, cfg->type, cfg->url);
+        return ERR_CODE_OPERATE_ADD;
+    }
+    *olen = 0;
+    return SUCCESS;
 }
 
-static inline void config_advertising_del(advertising_cfg_t *cfg)
+static int32 config_advertising_del(const int32 cmd,
+                                    void *ibuf,
+                                    int32 ilen,
+                                    void *obuf,
+                                    int32 *olen)
 {
-    advertising_t *ads = advertising_search(cfg->id, cfg->type);
+    advertising_t *ads;
+    advertising_cfg_t *cfg;
+    if (ilen < sizeof(*cfg))
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    cfg = (advertising_cfg_t *)ibuf;
     DB_PARAM("advertising: id[%u],type[%d],url[%s].", cfg->id, cfg->type, cfg->url);
+    ads = advertising_search(cfg->id, cfg->type);
     if (NULL != ads)
     {
         advertising_put(ads);
         advertising_del(ads);
     }
+    *olen = 0;
+    return SUCCESS;
 }
 
-static inline int32 config_advertising_policy_set(advertising_policy_t *policy)
+static int32 config_advertising_policy_set(const int32 cmd,
+                                           void *ibuf,
+                                           int32 ilen,
+                                           void *obuf,
+                                           int32 *olen)
 {
+    advertising_policy_t *policy = (advertising_policy_t *)ibuf;
+    if (ilen < sizeof(*policy))
+    {
+        DB_ERR("ilen(%d) < sizeof(*policy)(%d). cmd(0x%x).", ilen, sizeof(*policy), cmd);
+        config_error(obuf, olen, "Invalid parameter. Received data length(%d) < Expect data length(%d). cmd[0x%x].", 
+                ilen, sizeof(*policy), cmd);
+        return ERR_CODE_PARAMETER;
+    }
     DB_PARAM("advertising-policy: policy[%d], option[%d], type[%d], time-interval[%llu], flow-interval[%llu].", 
         policy->policy, policy->option, policy->type, policy->time_interval, policy->flow_interval);
-    return advertising_policy_set(policy);
+    if (0 != advertising_policy_set(policy))
+    {
+        DB_ERR("advertising_policy_set() call fail. cmd[0x%x].", cmd);
+        config_error(obuf, olen,  "Set Advertising Policy fail. cmd[0x%x].", cmd);
+        return ERR_CODE_OPERATE_ADD;
+    }
+    *olen = 0;
+    return SUCCESS;
 }
 
-static inline int32 config_advertising_policy_query(void *obuf,
-                                                    int32 *olen)
+static int32 config_advertising_policy_query(const int32 cmd,
+                                             void *ibuf,
+                                             int32 ilen,
+                                             void *obuf,
+                                             int32 *olen)
 {
-    return advertising_policy_query_all(obuf, olen);
+    int32 ret;
+    ret = advertising_policy_query_all(obuf, olen);
+    if (0 != ret)
+    {
+        DB_ERR("config_advertising_policy_query() call fail. cmd[0x%x].", cmd);
+        config_error(obuf, olen, "Query Advertising Policy fail. cmd[0x%x].", cmd);
+        return ERR_CODE_OPERATE_QUERY;
+    }
+    return SUCCESS;
 }
 
-static inline int32 config_blacklist_add(const uint8 *mac)
+static int32 config_blacklist_add(const int32 cmd,
+                                  void *ibuf,
+                                  int32 ilen,
+                                  void *obuf,
+                                  int32 *olen)
 {
     blacklist_t black;
-    DB_PARAM("mac["MACSTR"]", MAC2STR(mac));
+    uint8 *mac = (uint8 *)ibuf;
+    int32 ret;
+    if (ilen < HWADDR_SIZE)
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    DB_PARAM("mac["MACSTR"].", MAC2STR(mac));
     bzero(&black, sizeof(black));
     memcpy(black.mac, mac, sizeof(black.mac));
-    return blacklist_add(&black);
+    ret = blacklist_add(&black);
+    if (0 != ret)
+    {
+        DB_ERR("blacklist_add() fail. hwaddr[" MACSTR "].", MAC2STR(mac));
+        config_error(obuf, olen, "Add user to blacklist fail. hwaddr[" MACSTR "], cmd[0x%x].", 
+            MAC2STR(mac), cmd);
+        return ERR_CODE_OPERATE_ADD;
+    }
+    *olen = 0;
+    return SUCCESS;
 }
 
-static inline void config_blacklist_del(const uint8 *mac)
+static int32 config_blacklist_del(const int32 cmd,
+                                  void *ibuf,
+                                  int32 ilen,
+                                  void *obuf,
+                                  int32 *olen)
 {
-    blacklist_t *black = blacklist_search(mac);
-    DB_PARAM("mac["MACSTR"]", MAC2STR(mac));
+    blacklist_t *black;
+    uint8 *mac = (uint8 *)ibuf;
+    if (ilen < HWADDR_SIZE)
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    DB_PARAM("mac["MACSTR"].", MAC2STR(mac));
+    black = blacklist_search(mac);
     if (NULL != black)
     {
         blacklist_put(black);
         blacklist_del(black);
     }
+    *olen = 0;
+    return SUCCESS;
 }
 
 typedef struct authenticated_cfg_st{
@@ -80,9 +204,24 @@ typedef struct authenticated_cfg_st{
     uint64 total_flows;
 }authenticated_cfg_t;
 
-static inline int32 config_authenticated_add(authenticated_cfg_t *cfg)
+static int32 config_authenticated_add(const int32 cmd,
+                                      void *ibuf,
+                                      int32 ilen,
+                                      void *obuf,
+                                      int32 *olen)
 {
+    authenticated_cfg_t *cfg = NULL;
     authenticated_t auth;
+    int32 ret;
+    if (NULL == ibuf || ilen < sizeof(*cfg))
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    cfg = (authenticated_cfg_t *)ibuf;
     DB_PARAM("mac["MACSTR"], acct_status:%d, acct_policy:%d, total_seconds:%llu, total_flows:%llu",
         MAC2STR(cfg->mac), cfg->acct_status, cfg->acct_policy, cfg->total_seconds, cfg->total_flows);
     bzero(&auth, sizeof(auth));
@@ -101,19 +240,154 @@ static inline int32 config_authenticated_add(authenticated_cfg_t *cfg)
         auth.acct.valid_time = cfg->total_seconds;
         auth.acct.valid_flow = cfg->total_flows;
     }
-    return authenticated_add(&auth);
+    ret = authenticated_add(&auth);
+    if (0 != ret)
+    {
+        DB_ERR("config_authenticated_add() fail. hwaddr[" MACSTR "].", MAC2STR(cfg->mac));
+        config_error(obuf, olen, "Add authenticated user fail. hwaddr[" MACSTR "], cmd[0x%x].", 
+            MAC2STR(cfg->mac), cmd);
+        return ERR_CODE_OPERATE_ADD;
+    }
+    *olen = 0;
+    return SUCCESS;
 }
 
-static inline void config_authenticated_del(const uint8 *mac)
+static int32 config_authenticated_del(const int32 cmd,
+                                      void *ibuf,
+                                      int32 ilen,
+                                      void *obuf,
+                                      int32 *olen)
 {
-    authenticated_t *auth = authenticated_search(mac);
-    DB_PARAM("mac["MACSTR"].",MAC2STR(mac));
+    authenticated_t *auth;
+    uint8 *mac = (uint8 *)ibuf;
+    if (ilen < HWADDR_SIZE)
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    DB_PARAM("mac["MACSTR"].", MAC2STR(mac));
+    auth = authenticated_search(mac);
     if (NULL != auth)
     {
         authenticated_put(auth);
         authenticated_del(auth);
     }
+    *olen = 0;
+    return SUCCESS;
 }
+
+typedef struct portal_cfg_st{
+    int32 apply;/*0:interface; 1:vlan*/
+    union {
+        int8 ifname[IFNAME_SIZE];
+        uint16 vlan_id;
+    };
+    int8 url[URL_SIZE];
+}portal_cfg_t;
+
+static int32 config_portal_add(const int32 cmd,
+                               void *ibuf,
+                               int32 ilen,
+                               void *obuf,
+                               int32 *olen)
+{
+    portal_cfg_t *cfg;
+    int32 ret = -1;
+    if (NULL == ibuf || ilen < sizeof(*cfg))
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    cfg = (portal_cfg_t *)ibuf;
+    if (0 == cfg->apply) /*apply to interface*/
+    {
+        DB_PARAM("apply[%d], ifname[%s], url[%s].", cfg->apply, cfg->ifname, cfg->url);
+        ret = portal_interface_add(cfg->ifname, cfg->url);
+        if (0 != ret)
+        {
+            DB_ERR("portal_interface_add() fail. ifname[%s], url[%s], cmd[0x%x].", cfg->ifname, cfg->url, cmd);
+            config_error(obuf, olen, "Apply portal '%s' to the interface '%s' failure. cmd[0x%x].", cfg->url, cfg->ifname, cmd);
+            return ERR_CODE_OPERATE_ADD;
+        }
+    }
+    else if (1 == cfg->apply) /*apply to vlan*/
+    {
+        DB_PARAM("apply[%d], vlan_id[%u], url[%s].", cfg->apply, cfg->vlan_id, cfg->url);
+        ret = portal_vlan_add(cfg->vlan_id, cfg->url);
+        if (0 != ret)
+        {
+            DB_ERR("portal_vlan_add() fail. vlan_id[%u], url[%s], cmd[0x%x].", cfg->vlan_id, cfg->url, cmd);
+            config_error(obuf, olen, "Apply portal '%s' to the vlan '%u' failure. cmd[0x%x].", cfg->url, cfg->vlan_id, cmd);
+            return ERR_CODE_OPERATE_ADD;
+        }
+    }
+    else
+    {
+        DB_ERR("Undefined portal config apply-type(%d). cmd[0x%x].", cfg->apply, cmd);
+        config_error(obuf, olen, "Undefined portal config apply-type(%d). cmd[0x%x].", cfg->apply, cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    *olen = 0;
+    return SUCCESS;
+}
+
+static int32 config_portal_del(const int32 cmd,
+                               void *ibuf,
+                               int32 ilen,
+                               void *obuf,
+                               int32 *olen)
+{
+    portal_cfg_t *cfg;
+    if (NULL == ibuf || ilen < sizeof(*cfg))
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, sizeof(*cfg), cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    cfg = (portal_cfg_t *)ibuf;
+    if (0 == cfg->apply) /*apply to interface*/
+    {
+        DB_PARAM("apply[%d], ifname[%s].", cfg->apply, cfg->ifname, cfg->url);
+        portal_interface_delete(cfg->ifname);
+    }
+    else if (1 == cfg->apply) /*apply to vlan*/
+    {
+        DB_PARAM("apply[%d], vlan_id[%u].", cfg->apply, cfg->vlan_id);
+        portal_vlan_delete(cfg->vlan_id);
+    }
+    else
+    {
+        DB_ERR("Undefined portal config apply-type(%d). cmd[0x%x].", cfg->apply, cmd);
+        config_error(obuf, olen, "Undefined portal config apply-type(%d). cmd[0x%x].", cfg->apply, cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    *olen = 0;
+    return SUCCESS;
+}
+
+static struct {
+    int32 cmd;
+    int32 (*handle)(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen);
+} s_config_handles[] = {
+        {MSG_CMD_AS_AUTHENTICATED_ADD,          config_authenticated_add},
+        {MSG_CMD_AS_AUTHENTICATED_DELETE,       config_authenticated_del},
+        {MSG_CMD_AS_BLACKLIST_ADD,              config_blacklist_add},
+        {MSG_CMD_AS_BLACKLIST_DELETE,           config_blacklist_del},
+        {MSG_CMD_AS_ADVERTISING_ADD,            config_advertising_add},
+        {MSG_CMD_AS_ADVERTISING_DELETE,         config_advertising_del},
+        {MSG_CMD_AS_ADVERTISING_POLICY_SET,     config_advertising_policy_set},
+        {MSG_CMD_AS_ADVERTISING_POLICY_QUERY,   config_advertising_policy_query},
+        {MSG_CMD_AS_PORTAL_ADD,                 config_portal_add},
+        {MSG_CMD_AS_PORTAL_DELETE,              config_portal_del}
+};
 
 static int32 config_handle(const int32 cmd, 
                            void *ibuf, 
@@ -121,168 +395,19 @@ static int32 config_handle(const int32 cmd,
                            void *obuf, 
                            int32 *olen)
 {
-    int32 ret = -1;
-    switch (cmd)
+    int32 index;
+#define MSG_CMD_AS_VALID(cmd)   ((cmd) >= MSG_CMD_AS_START && (cmd) < MSG_CMD_AS_END)
+    if (!MSG_CMD_AS_VALID(cmd))
     {
-    case MSG_CMD_AS_AUTHENTICATED_ADD:
-        {
-            authenticated_cfg_t *auth_cfg = (authenticated_cfg_t *)ibuf;
-            if (ilen < sizeof(*auth_cfg))
-            {
-                DB_ERR("ilen(%d) < sizeof(*auth_cfg)(%d). cmd(0x%x).", ilen, sizeof(*auth_cfg), cmd);
-                *olen = snprintf(obuf, *olen, "Invalid parameter. Received data length(%d) < Expect data length(%d). cmd[0x%x].", 
-                                ilen, sizeof(*auth_cfg), cmd);
-                return ERR_CODE_PARAMETER;
-                
-            }
-            ret = config_authenticated_add(auth_cfg);
-            if (0 != ret)
-            {
-                DB_ERR("config_authenticated_add() fail. hwaddr[" MACSTR "].", MAC2STR(auth_cfg->mac));
-                *olen = snprintf(obuf, *olen, "Add authenticated user fail. cmd[0x%x], hwaddr[" MACSTR "].", 
-                    cmd, MAC2STR(auth_cfg->mac));
-                return ERR_CODE_OPERATE_ADD;
-            }
-            *olen = 0;
-            return SUCCESS;
-        }
-    case MSG_CMD_AS_AUTHENTICATED_DELETE:
-        {
-            uint8 *mac = (uint8 *)ibuf;
-            if (ilen < HWADDR_SIZE)
-            {
-                DB_ERR("ilen(%d) < HWADDR_SIZE(%d). cmd(0x%x).", ilen, HWADDR_SIZE, cmd);
-                *olen = snprintf(obuf, *olen, "Invalid parameter. Received data length(%d) < Expect data length(%d). cmd[0x%x].", 
-                                ilen, HWADDR_SIZE, cmd);
-                return ERR_CODE_PARAMETER;
-            }
-            config_authenticated_del(mac);
-            *olen = 0;
-            return SUCCESS;
-        }
-    case MSG_CMD_AS_AUTHENTICATED_QUERY:
-        break;
-    case MSG_CMD_AS_BLACKLIST_ADD:
-        {
-            uint8 *mac = (uint8 *)ibuf;
-            if (ilen < HWADDR_SIZE)
-            {
-                DB_ERR("ilen(%d) < HWADDR_SIZE(%d). cmd(0x%x).", ilen, HWADDR_SIZE, cmd);
-                *olen = snprintf(obuf, *olen, "Invalid parameter. Received data length(%d) < Expect data length(%d). cmd[0x%x].", 
-                                ilen, HWADDR_SIZE, cmd);
-                return ERR_CODE_PARAMETER;
-            }
-            ret = config_blacklist_add(mac);
-            if (0 != ret)
-            {
-                DB_ERR("config_blacklist_add() fail. cmd[0x%x], hwaddr[" MACSTR "].", cmd, MAC2STR(mac));
-                *olen = snprintf(obuf, *olen, "Add blacklist user fail. cmd[0x%x], hwaddr[" MACSTR "].", cmd, MAC2STR(mac));
-                return ERR_CODE_OPERATE_ADD;
-            }
-            *olen = 0;
-            return SUCCESS;
-        }
-    case MSG_CMD_AS_BLACKLIST_DELETE:
-        {
-            uint8 *mac = (uint8 *)ibuf;
-            if (ilen < HWADDR_SIZE)
-            {
-                DB_ERR("ilen(%d) < HWADDR_SIZE(%d). cmd(0x%x).", ilen, HWADDR_SIZE, cmd);
-                *olen = snprintf(obuf, *olen, "Invalid parameter. Received data length(%d) < Expect data length(%d). cmd[0x%x].", 
-                                ilen, HWADDR_SIZE, cmd);
-                return ERR_CODE_PARAMETER;
-            }
-            config_blacklist_del(mac);
-            *olen = 0;
-            return SUCCESS;
-        }
-    case MSG_CMD_AS_BLACKLIST_QUERY:
-        break;
-    case MSG_CMD_AS_ADVERTISING_ADD:
-        {
-            advertising_cfg_t *ads_cfg = (advertising_cfg_t *)ibuf;
-            if (ilen < sizeof(*ads_cfg))
-            {
-                DB_ERR("ilen(%d) < sizeof(*ads_cfg)(%d). cmd(0x%x).", ilen, sizeof(*ads_cfg), cmd);
-                *olen = snprintf(obuf, *olen, "Invalid parameter. Received data length(%d) < Expect data length(%d). cmd[0x%x].", 
-                                ilen, sizeof(*ads_cfg), cmd);
-                return ERR_CODE_PARAMETER;
-                
-            }
-            ret = config_advertising_add(ads_cfg);
-            if (0 != ret)
-            {
-                DB_ERR("config_advertising_add() fail. cmd[0x%x], id[%u], type[%d], url[%s].", 
-                        cmd, ads_cfg->id, ads_cfg->type, ads_cfg->url);
-                *olen = snprintf(obuf, *olen, "Add advertising fail. cmd[0x%x], id[%u], type[%d], url[%s].", 
-                                cmd, ads_cfg->id, ads_cfg->type, ads_cfg->url);
-                return ERR_CODE_OPERATE_ADD;
-            }
-            *olen = 0;
-            return SUCCESS;
-        }
-    case MSG_CMD_AS_ADVERTISING_DELETE:
-        {
-            advertising_cfg_t *ads_cfg = (advertising_cfg_t *)ibuf;
-            if (ilen < sizeof(*ads_cfg))
-            {
-                DB_ERR("ilen(%d) < sizeof(*ads_cfg)(%d). cmd(0x%x).", ilen, sizeof(*ads_cfg), cmd);
-                *olen = snprintf(obuf, *olen, "Invalid parameter. Received data length(%d) < Expect data length(%d). cmd[0x%x].", 
-                                ilen, sizeof(*ads_cfg), cmd);
-                return ERR_CODE_PARAMETER;
-                
-            }
-            config_advertising_del(ads_cfg);
-            *olen = 0;
-            return SUCCESS;
-        }
-    case MSG_CMD_AS_ADVERTISING_QUERY:
-        break;
-    case MSG_CMD_AS_ADVERTISING_POLICY_SET:
-        {
-            advertising_policy_t *policy = (advertising_policy_t *)ibuf;
-            if (ilen < sizeof(*policy))
-            {
-                DB_ERR("ilen(%d) < sizeof(*policy)(%d). cmd(0x%x).", ilen, sizeof(*policy), cmd);
-                *olen = snprintf(obuf, *olen, "Invalid parameter. Received data length(%d) < Expect data length(%d). cmd[0x%x].", 
-                                ilen, sizeof(*policy), cmd);
-                return ERR_CODE_PARAMETER;
-            }
-            if (0 != config_advertising_policy_set(policy))
-            {
-                DB_ERR("config_advertising_policy_set() call fail. cmd[0x%x].", cmd);
-                *olen = snprintf(obuf, *olen,  "Set Advertising Policy fail. cmd[0x%x].", cmd);
-                return ERR_CODE_OPERATE_ADD;
-            }
-            *olen = 0;
-            return SUCCESS;
-        }
-    case MSG_CMD_AS_ADVERTISING_POLICY_QUERY:
-        if (0 != config_advertising_policy_query(obuf, olen))
-        {
-            DB_ERR("config_advertising_policy_query() call fail. cmd[0x%x].", cmd);
-            *olen = snprintf(obuf, *olen, "Query Advertising Policy fail. cmd[0x%x].", cmd);
-            return ERR_CODE_OPERATE_QUERY;
-        }
-        return SUCCESS;
-    case MSG_CMD_AS_PORTAL_URL_SET:
-        break;
-    case MSG_CMD_AS_PORTAL_URL_QUERY:
-        break;
-    case MSG_CMD_AS_INNER_INTERFACE_SET:
-        break;
-    case MSG_CMD_AS_INNER_INTERFACE_QUERY:
-        break;
-    case MSG_CMD_AS_OUTER_INTERFACE_SET:
-        break;
-    case MSG_CMD_AS_OUTER_INTERFACE_QUERY:
-        break;
-    default:
-        *olen = snprintf(obuf, *olen, "Invalid cmd[0x%x].", cmd);
+        config_error(obuf, olen, "Invalid cmd[0x%x].", cmd);
         return ERR_CODE_NONECMD;
-        break;
     }
-    *olen = snprintf(obuf, *olen, "Unsupported cmd[0x%x] now.", cmd);
+    for (index = 0; index < ARRAY_SIZE(s_config_handles); ++index)
+    {
+        if (cmd == s_config_handles[index].cmd && NULL != s_config_handles[index].handle)
+            return s_config_handles[index].handle(cmd, ibuf, ilen, obuf, olen);
+    }
+    config_error(obuf, olen, "Unsupported cmd[0x%x] now.", cmd);
     return ERR_CODE_UNSUPPORTED;
 }
 

@@ -30,6 +30,8 @@ enum msg_cmd_en {
     MSG_CMD_MANAGE_START                = DEFINE_CMD(MODULE_MANAGE, USER_MODULE, 1),
     MSG_CMD_MANAGE_HEARTBEAT            = MSG_CMD_MANAGE_START,
     MSG_CMD_MANAGE_USER_QUERY           = MSG_CMD_MANAGE_START+1,
+    MSG_CMD_MANAGE_USER_REGISTER        = MSG_CMD_MANAGE_START+2,
+    MSG_CMD_MANAGE_TEXT_SEND            = MSG_CMD_MANAGE_START+3,
     
     /*web server module*/
     MSG_CMD_WS_START                    = DEFINE_CMD(MODULE_WS, USER_MODULE, 1),
@@ -50,18 +52,17 @@ enum msg_cmd_en {
     MSG_CMD_AS_BLACKLIST_ADD            = MSG_CMD_AS_START + 3, /*app --> kernel*/
     MSG_CMD_AS_BLACKLIST_DELETE         = MSG_CMD_AS_START + 4, /*app --> kernel*/
     MSG_CMD_AS_BLACKLIST_QUERY          = MSG_CMD_AS_START + 5, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_ADD          = MSG_CMD_AS_START + 6, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_DELETE       = MSG_CMD_AS_START + 7, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_QUERY        = MSG_CMD_AS_START + 8, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_POLICY_SET   = MSG_CMD_AS_START + 9, /*app --> kernel*/
-    MSG_CMD_AS_ADVERTISING_POLICY_QUERY = MSG_CMD_AS_START + 10,/*app --> kernel*/
-    MSG_CMD_AS_PORTAL_URL_SET           = MSG_CMD_AS_START + 11,/*app --> kernel*/
-    MSG_CMD_AS_PORTAL_URL_QUERY         = MSG_CMD_AS_START + 12,/*app --> kernel*/
-    MSG_CMD_AS_INNER_INTERFACE_SET      = MSG_CMD_AS_START + 13,/*app --> kernel*/
-    MSG_CMD_AS_INNER_INTERFACE_QUERY    = MSG_CMD_AS_START + 14,/*app --> kernel*/
-    MSG_CMD_AS_OUTER_INTERFACE_SET      = MSG_CMD_AS_START + 15,/*app --> kernel*/
-    MSG_CMD_AS_OUTER_INTERFACE_QUERY    = MSG_CMD_AS_START + 16,/*app --> kernel*/
-    MSG_CMD_AS_END                      = MSG_CMD_AS_START + 17,
+    MSG_CMD_AS_WHITELIST_ADD            = MSG_CMD_AS_START + 6, /*app --> kernel*/
+    MSG_CMD_AS_WHITELIST_DELETE         = MSG_CMD_AS_START + 7, /*app --> kernel*/
+    MSG_CMD_AS_WHITELIST_QUERY          = MSG_CMD_AS_START + 8, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_ADD          = MSG_CMD_AS_START + 9, /*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_DELETE       = MSG_CMD_AS_START + 10,/*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_QUERY        = MSG_CMD_AS_START + 11,/*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_POLICY_SET   = MSG_CMD_AS_START + 12,/*app --> kernel*/
+    MSG_CMD_AS_ADVERTISING_POLICY_QUERY = MSG_CMD_AS_START + 13,/*app --> kernel*/
+    MSG_CMD_AS_PORTAL_ADD               = MSG_CMD_AS_START + 14,/*app --> kernel*/
+    MSG_CMD_AS_PORTAL_DELETE            = MSG_CMD_AS_START + 15,/*app --> kernel*/
+    MSG_CMD_AS_END                      = MSG_CMD_AS_START + 16,
 };
 
 
@@ -80,14 +81,15 @@ enum error_code {
 	ERR_CODE_UNSUPPORTED,
 	ERR_CODE_OPERATE_ADD,
 	ERR_CODE_OPERATE_DELETE,
+	ERR_CODE_OPERATE_UPDATE,
 	ERR_CODE_OPERATE_QUERY,
 };
 
 typedef int32 (*msg_cmd_handle_cb)(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen);
 
 typedef struct msg_st{
-    int16    ver;       /*版本号,目前为0x01*/
- 	int16    flag;      /*0:表示请求报文;1:表示应答报文*/
+    int16    ver;        /*版本号,目前为0x01*/
+ 	int16    flag;       /*0:表示请求报文;1:表示应答报文*/
     int32   cmd;        /*操作命令字,详见msg_cmd_e的定义*/
     int16   smid;       /*源模块ID*/
     int16   dmid;       /*目的模块ID*/
@@ -115,3 +117,4 @@ extern int32 free_rcv_buf(void *rcv_buf);
 #endif
 
 #endif /*__MESSAGE_H__*/
+

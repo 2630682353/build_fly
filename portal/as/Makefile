@@ -19,8 +19,7 @@ define KernelPackage/as
   TITLE:=Access Service Module
   FILES:=$(PKG_BUILD_DIR)/as.ko
   AUTOLOAD:=$(call AutoLoad,50,as)
-  DEPENDS=+libipc
-  DEPENDS=+klog
+  DEPENDS+=+libipc
 endef
 
 define KernelPackage/as/description

@@ -19,7 +19,7 @@ typedef enum ads_type_en{
 
 typedef struct advertising_st{
     struct list_head list;
-    uint32 id;
+    uint32 id;  /*Must greater than 0*/
     int32 type; /*Values from enum "ads_type_e"*/
     atomic_t refcnt;
     uint8 url[URL_SIZE];

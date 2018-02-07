@@ -9,6 +9,7 @@
 #include "http.h"
 #include "config.h"
 #include "log.h"
+#include "vlan.h"
 
 #include <linux/delay.h>
 #include <linux/kthread.h>
@@ -71,6 +72,7 @@ static void authenticated_keyfree(void *key)
 static int32 authenticated_datadup(void **dst, const void *src)
 {
     authenticated_t *auth, *auth2;
+    uint64 now = curtime();
     if (unlikely(NULL == dst || NULL == src))
         return -1;
     *dst = memcache_alloc(sp_cache_data);
@@ -78,10 +80,18 @@ static int32 authenticated_datadup(void **dst, const void *src)
     auth = (authenticated_t *)*dst;
     auth2 = (authenticated_t *)src;
     atomic_set(&auth->refcnt, 1);
-    auth->time.start = auth->time.latest = curtime();
+    auth->time.start = auth->time.latest = now;
     memcpy(auth->mac, auth2->mac, sizeof(auth->mac));
     auth->ipaddr = auth2->ipaddr;
     memcpy(&auth->acct, &auth2->acct, sizeof(auth->acct));
+    /*advertising*/
+    auth->ads_push.adsid = 0;
+    auth->ads_push.latest_flow = 0;
+    auth->ads_push.latest_time = now;
+    auth->ads_embed.adsid = 0;
+    auth->ads_embed.latest_flow = 0;
+    auth->ads_embed.latest_time = now;
+    
     spinlock_init(&auth->lock);
     spinlock_lock(&s_spinlock_list_auth);
     list_add_tail(&auth->list,&s_list_auth);
@@ -131,7 +141,7 @@ static int32 authenticated_burned_check_func(void *data)
                     break;
                 }
             }
-            auth = (&s_list_auth == &auth->list) ? NULL : auth;
+            auth = (NULL == auth || &s_list_auth == &auth->list) ? NULL : auth;
         }
         else
             auth = NULL;
@@ -316,15 +326,28 @@ int32 authenticated_uplink_skb_update(authenticated_t *auth,
                                       struct sk_buff *skb)
 {
     int32 ret = -1;
-    struct ethhdr *ethh = eth_hdr(skb);
-    struct iphdr *iph = (struct iphdr *)(ethh+1);
+    struct iphdr *iph = NULL;
     uint64 now = curtime();
     uint64 flow_total;
     advertising_policy_t *ads_policy = NULL;
     BOOL need_stopping = FALSE;
     
-    if (ntohs(ethh->h_proto) != ETH_P_IP)
-        return 0;
+    if (skb_from_vlan_dev(skb))
+    {
+        struct vlan_ethhdr *vethh = vlan_eth_hdr(skb);
+        if (htons(ETH_P_IP) != vethh->h_vlan_encapsulated_proto)
+            return 0;
+        else
+            iph = http_iphdr(skb);
+    }
+    else
+    {
+        struct ethhdr *ethh = eth_hdr(skb);
+        if (htons(ETH_P_IP) != ethh->h_proto)
+            return 0;
+        else
+            iph = http_iphdr(skb);
+    }
     
     spinlock_lock(&auth->lock);
     ++auth->stats.uplink_pkts;
@@ -351,19 +374,19 @@ int32 authenticated_uplink_skb_update(authenticated_t *auth,
 
     if (TRUE == is_http(skb))
     {
-        ads_policy = advertising_policy_get(auth->ads_push.type);
+        ads_policy = advertising_policy_get(ADS_TYPE_PUSH);
         if (NULL != ads_policy)
         {
-            if (((ADS_POLICY_TIME_INTERVAL & auth->ads_push.policy) 
+            if (((ADS_POLICY_TIME_INTERVAL & ads_policy->policy) 
                     && ((now - auth->ads_push.latest_time) >= ads_policy->time_interval))
-                || ((ADS_POLICY_FLOW_INTERVAL & auth->ads_push.policy) 
+                || ((ADS_POLICY_FLOW_INTERVAL & ads_policy->policy) 
                     && ((flow_total - auth->ads_push.latest_flow) >= ads_policy->flow_interval)))
             {
                 struct tcphdr *tcph = (struct tcphdr *)((int8 *)iph + (iph->ihl*4));
                 int8 *body = (int8 *)tcph + tcph->doff * 4;
                 if (tcph->psh && tcph->ack && is_http_get_request(body))
                 {
-                    ret = advertising_redirect(skb, &auth->ads_push.adsid, auth->ads_push.type);
+                    ret = advertising_redirect(skb, &auth->ads_push.adsid, ADS_TYPE_PUSH);
                     if (likely(0 == ret))
                     {
                         auth->ads_push.latest_time = now;
@@ -461,16 +484,20 @@ static ssize_t authenticated_proc_read(struct file *file,
     {
         len = sprintf(tmp, "USER Authenticated Information.\nmax:%u, count:%u\n", 
                     s_maxcount, s_count);
-        len += sprintf(tmp+len, "%-18s%-18s%-8s%-8s"
-                    "%-8s%-8s%-8s%-8s"
-                    "%-8s%-8s%-8s%-8s%-8s%-8s"
-                    "%-8s%-8s%-8s"
-                    "%-8s%-8s%-8s\n", 
+        len += sprintf(tmp+len, "%s  %s  %s  %s  "
+                    "%s  %s  %s  %s  "
+                    "%s  %s  "
+                    "%s  %s  "
+                    "%s  %s  "
+                    "%s  %s  "
+                    "%s  %s\n", 
                     "mac", "ipaddr", "stime", "ltime", 
                     "acct", "policy", "times", "flows", 
-                    "u-pkts", "d-pkts", "u-bytes", "d-bytes", "u-drop", "d-drop",
-                    "push", "p-times", "p-flows", 
-                    "embed", "e-times", "e-flows");
+                    "uplink-pkts", "downlink-pkts", 
+                    "uplink-bytes", "downlink-bytes", 
+                    "uplink-drop", "downlink-drop",
+                    "push-times", "push-flows", 
+                    "embed-times", "embed-flows");
         if (likely(len > *ppos))
         {
             len = ((len - *ppos) > size) ? size : len;
@@ -488,15 +515,15 @@ static ssize_t authenticated_proc_read(struct file *file,
             "  %llu  %llu"
             "  %llu  %llu"
             "  %llu  %llu"
-            "  %d  %llu  %llu"
-            "  %d  %llu  %llu\n", 
+            "  %llu  %llu"
+            "  %llu  %llu\n", 
             MAC2STR(auth->mac), IP2STR(auth->ipaddr), auth->time.start, auth->time.latest,
             auth->acct.status ? "acct" : "none", auth->acct.policy, auth->acct.valid_time, auth->acct.valid_flow,
             auth->stats.uplink_pkts, auth->stats.downlink_pkts, 
             auth->stats.uplink_bytes, auth->stats.downlink_bytes, 
             auth->stats.uplink_dropped, auth->stats.downlink_dropped,
-            auth->ads_push.policy, auth->ads_push.latest_time, auth->ads_push.latest_flow,
-            auth->ads_embed.policy, auth->ads_embed.latest_time, auth->ads_embed.latest_flow);
+            auth->ads_push.latest_time, auth->ads_push.latest_flow,
+            auth->ads_embed.latest_time, auth->ads_embed.latest_flow);
         if (unlikely((len + copyed) > size))
             break;
         copy_to_user(buf+copyed, tmp, len);
@@ -533,16 +560,10 @@ static struct file_operations s_authenticated_fileops = {
 
 int32 authenticated_proc_init(struct proc_dir_entry *parent)
 {
-#ifdef KERNEL_4_4_7
     struct proc_dir_entry *entry = proc_create(PROC_AUTHENTICATED, 0, parent, &s_authenticated_fileops);
-#elif defined KERNEL_3_2_88
-    struct proc_dir_entry *entry = create_proc_entry(PROC_AUTHENTICATED, 0, parent);
-#else
-    #error "undefined kernel version"
-#endif
     if (NULL == entry)
     {
-        DB_ERR("proc_mkdir(%s) fail!!", PROC_AUTHENTICATED);
+        DB_ERR("proc_create(%s) fail!!", PROC_AUTHENTICATED);
         return -1;
     }
     sp_proc_authenticated = entry;

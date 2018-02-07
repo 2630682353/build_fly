@@ -82,6 +82,7 @@ endef
 define Package/AAA_client/install
 
 	$(INSTALL_DIR) $(1)/bin
+	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_DIR) $(1)/usr/local/etc/radiusclient
 	
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/etc/issue $(1)/usr/local/etc/radiusclient/
@@ -94,6 +95,7 @@ define Package/AAA_client/install
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/etc/dictionary.sip $(1)/usr/local/etc/radiusclient/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/etc/servers $(1)/usr/local/etc/radiusclient/
 
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/etc/config/acct_config $(1)/etc/config/
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/radius_client $(1)/bin/
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/radacct $(1)/bin/
 	
