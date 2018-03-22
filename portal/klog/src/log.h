@@ -49,14 +49,16 @@ void logging(const int32 level,
 #define LOGGING_INFO(fmt,ARGS...)       logging(L_INFO,fmt,##ARGS)
 #define LOGGING_DEBUG(fmt,ARGS...)      logging(L_DEBUG,fmt,##ARGS)
 #elif defined(LINUX_KERNEL)
-void klog_logging(const int32 level,
-                  int8 *fmt, ...);
+extern void klog_logging(const int32 level,
+                         int8 *fmt,...);
 #define LOGGING_CRIT(fmt,ARGS...)       klog_logging(L_CRIT,fmt,##ARGS)
 #define LOGGING_ERR(fmt,ARGS...)        klog_logging(L_ERR,fmt,##ARGS)
 #define LOGGING_WARNING(fmt,ARGS...)    klog_logging(L_WARNING,fmt,##ARGS)
 #define LOGGING_NOTICE(fmt,ARGS...)     klog_logging(L_NOTICE,fmt,##ARGS)
 #define LOGGING_INFO(fmt,ARGS...)       klog_logging(L_INFO,fmt,##ARGS)
 #define LOGGING_DEBUG(fmt,ARGS...)      klog_logging(L_DEBUG,fmt,##ARGS)
+#else
+#error "Please define macro 'LINUX_APP' or 'LINUX_KERNEL'."
 #endif
 
 #ifdef  __cplusplus

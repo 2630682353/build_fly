@@ -1,15 +1,15 @@
 #include "portal.h"
-#include "spinlock.h"
+#include "rwlock.h"
 #include "log.h"
 #include "debug.h"
 
 static LIST_HEAD(s_list_portal_interface);
-static spinlock_t s_spinlock_list_portal_interface;
+static rwlock_t s_rwlock_list_portal_interface;
 static uint32 s_portal_interface_count = 0;
 
 static inline int32 portal_interface_init(void)
 {
-    spinlock_init(&s_spinlock_list_portal_interface);
+    rwlock_init(&s_rwlock_list_portal_interface);
     s_portal_interface_count = 0;
     return 0;
 }
@@ -17,7 +17,7 @@ static inline int32 portal_interface_init(void)
 static inline void portal_interface_destroy(void)
 {
     portal_interface_t *interface;
-    spinlock_lock(&s_spinlock_list_portal_interface);
+    rwlock_wrlock_bh(&s_rwlock_list_portal_interface);
     while (!list_empty(&s_list_portal_interface))
     {
         interface = list_first_entry(&s_list_portal_interface, portal_interface_t, list);
@@ -25,8 +25,8 @@ static inline void portal_interface_destroy(void)
         free(interface);
     }
     s_portal_interface_count = 0;
-    spinlock_unlock(&s_spinlock_list_portal_interface);
-    spinlock_destroy(&s_spinlock_list_portal_interface);
+    rwlock_wrunlock_bh(&s_rwlock_list_portal_interface);
+    rwlock_destroy(&s_rwlock_list_portal_interface);
 }
 
 int32 portal_interface_add(const int8 *ifname,
@@ -40,7 +40,7 @@ int32 portal_interface_add(const int8 *ifname,
         LOGGING_ERR("Apply portal '%s' to the interface '%s' failure with invalid parameter.", url, ifname);
         return -1;
     }
-    spinlock_lock(&s_spinlock_list_portal_interface);
+    rwlock_wrlock_bh(&s_rwlock_list_portal_interface);
     list_for_each_entry(interface, &s_list_portal_interface, list)
     {
         if (0 == strcmp(interface->ifname, ifname))
@@ -50,18 +50,19 @@ int32 portal_interface_add(const int8 *ifname,
     {
         interface = (portal_interface_t *)malloc(sizeof(*interface));
         ASSERT(NULL != interface);
+        bzero(interface, sizeof(*interface));
         strcpy(interface->ifname, ifname);
         strcpy(interface->url, url);
         atomic_set(&interface->refcnt, 1);
         list_add_tail(&interface->list, &s_list_portal_interface);
         ++s_portal_interface_count;
-        spinlock_unlock(&s_spinlock_list_portal_interface);
+        rwlock_wrunlock_bh(&s_rwlock_list_portal_interface);
         LOGGING_INFO("Apply portal '%s' to the interface '%s' successfully.", url, ifname);
         return 0;
     }
     else
     {
-        spinlock_unlock(&s_spinlock_list_portal_interface);
+        rwlock_wrunlock_bh(&s_rwlock_list_portal_interface);
         DB_WAR("Apply portal '%s' to the interface '%s' failure. "
             "Because the portal '%s' has been applied on the interface '%s'.", 
             url, ifname, interface->url, interface->ifname);
@@ -72,19 +73,24 @@ int32 portal_interface_add(const int8 *ifname,
     }
 }
 
-static inline void __portal_interface_delete(portal_interface_t *interface)
+static inline void __portal_interface_delete_bh(portal_interface_t *interface)
 {
-    if (atomic_dec_and_test(&interface->refcnt))
-    {
-        LOGGING_INFO("Delete portal '%s' from the interface '%s' successfully.", 
-                interface->url, interface->ifname);
-        list_del(&interface->list);
-        free(interface);
-        --s_portal_interface_count;
-    }
+    if (unlikely(NULL == interface))
+        return;
+    if (likely(atomic_read(&interface->refcnt) == 1))
+        smp_rmb();
+    else if (likely(!atomic_dec_and_test(&interface->refcnt)))
+        return;
+    LOGGING_INFO("Delete portal '%s' from the interface '%s' successfully.", 
+            interface->url, interface->ifname);
+    rwlock_wrlock_bh(&s_rwlock_list_portal_interface);
+    list_del(&interface->list);
+    free(interface);
+    --s_portal_interface_count;
+    rwlock_wrunlock_bh(&s_rwlock_list_portal_interface);
 }
 
-void portal_interface_delete(const int8 *ifname)
+void portal_interface_delete_bh(const int8 *ifname)
 {
     portal_interface_t *interface = NULL;
     if (NULL == ifname ||strlen(ifname) <= 0 || strlen(ifname) >= IFNAME_SIZE)
@@ -92,17 +98,17 @@ void portal_interface_delete(const int8 *ifname)
         DB_ERR("Invalid ifname(%s).", ifname);
         LOGGING_ERR("Delete portal from the interface failure with invalid parameter. ifname[%s].", ifname);
     }
-    spinlock_lock(&s_spinlock_list_portal_interface);
+    rwlock_rdlock_bh(&s_rwlock_list_portal_interface);
     list_for_each_entry(interface, &s_list_portal_interface, list)
     {
         if (0 == strcmp(interface->ifname, ifname))
             break;
     }
+    rwlock_rdunlock_bh(&s_rwlock_list_portal_interface);
     if (NULL != interface && &s_list_portal_interface != &interface->list)
-        __portal_interface_delete(interface);
+        __portal_interface_delete_bh(interface);
     else
         LOGGING_WARNING("There is not applied portal to the interface '%s'.", ifname);
-    spinlock_unlock(&s_spinlock_list_portal_interface);
 }
 
 portal_interface_t *portal_interface_get(const int8 *ifname)
@@ -110,7 +116,7 @@ portal_interface_t *portal_interface_get(const int8 *ifname)
     portal_interface_t *interface = NULL;
     if (NULL == ifname || strlen(ifname) <= 0)
         return NULL;
-    spinlock_lock(&s_spinlock_list_portal_interface);
+    rwlock_rdlock(&s_rwlock_list_portal_interface);
     list_for_each_entry(interface, &s_list_portal_interface, list)
     {
         if (0 == strcmp(interface->ifname, ifname))
@@ -120,18 +126,30 @@ portal_interface_t *portal_interface_get(const int8 *ifname)
         atomic_inc(&interface->refcnt);
     else
         interface = NULL;
-    spinlock_unlock(&s_spinlock_list_portal_interface);
+    rwlock_rdunlock(&s_rwlock_list_portal_interface);
     return interface;
+}
+
+static inline void __portal_interface_delete(portal_interface_t *interface)
+{
+    if (unlikely(NULL == interface))
+        return;
+    if (likely(atomic_read(&interface->refcnt) == 1))
+        smp_rmb();
+    else if (likely(!atomic_dec_and_test(&interface->refcnt)))
+        return;
+    LOGGING_INFO("Delete portal '%s' from the interface '%s' successfully.", 
+            interface->url, interface->ifname);
+    rwlock_wrlock(&s_rwlock_list_portal_interface);
+    list_del(&interface->list);
+    free(interface);
+    --s_portal_interface_count;
+    rwlock_wrunlock(&s_rwlock_list_portal_interface);
 }
 
 void portal_interface_put(portal_interface_t *interface)
 {
-    if (NULL != interface)
-    {
-        spinlock_lock(&s_spinlock_list_portal_interface);
-        __portal_interface_delete(interface);
-        spinlock_unlock(&s_spinlock_list_portal_interface);
-    }
+    __portal_interface_delete(interface);
 }
 
 BOOL portal_interface_exist(const int8 *ifname)
@@ -140,7 +158,7 @@ BOOL portal_interface_exist(const int8 *ifname)
     BOOL exist = FALSE;
     if (NULL == ifname || strlen(ifname) <= 0)
         return exist;
-    spinlock_lock(&s_spinlock_list_portal_interface);
+    rwlock_rdlock(&s_rwlock_list_portal_interface);
     list_for_each_entry(interface, &s_list_portal_interface, list)
     {
         if (0 == strcmp(interface->ifname, ifname))
@@ -149,18 +167,18 @@ BOOL portal_interface_exist(const int8 *ifname)
             break;
         }
     }
-    spinlock_unlock(&s_spinlock_list_portal_interface);
+    rwlock_rdunlock(&s_rwlock_list_portal_interface);
     return exist;
 }
 
 
 static LIST_HEAD(s_list_portal_vlan);
-static spinlock_t s_spinlock_list_portal_vlan;
+static rwlock_t s_rwlock_list_portal_vlan;
 static uint32 s_portal_vlan_count = 0;
 
 static inline int32 portal_vlan_init(void)
 {
-    spinlock_init(&s_spinlock_list_portal_vlan);
+    rwlock_init(&s_rwlock_list_portal_vlan);
     s_portal_vlan_count = 0;
     return 0;
 }
@@ -168,7 +186,7 @@ static inline int32 portal_vlan_init(void)
 static inline void portal_vlan_destroy(void)
 {
     portal_vlan_t *vlan;
-    spinlock_lock(&s_spinlock_list_portal_vlan);
+    rwlock_wrlock_bh(&s_rwlock_list_portal_vlan);
     while (!list_empty(&s_list_portal_vlan))
     {
         vlan = list_first_entry(&s_list_portal_vlan, portal_vlan_t, list);
@@ -176,8 +194,8 @@ static inline void portal_vlan_destroy(void)
         free(vlan);
     }
     s_portal_vlan_count = 0;
-    spinlock_unlock(&s_spinlock_list_portal_vlan);
-    spinlock_destroy(&s_spinlock_list_portal_vlan);
+    rwlock_wrunlock_bh(&s_rwlock_list_portal_vlan);
+    rwlock_destroy(&s_rwlock_list_portal_vlan);
 }
 
 int32 portal_vlan_add(const uint16 vlan_id,
@@ -190,7 +208,7 @@ int32 portal_vlan_add(const uint16 vlan_id,
         LOGGING_ERR("Apply portal '%s' to the vlan '%u' failure with invalid parameter.", url, vlan_id);
         return -1;
     }
-    spinlock_lock(&s_spinlock_list_portal_vlan);
+    rwlock_wrlock_bh(&s_rwlock_list_portal_vlan);
     list_for_each_entry(vlan, &s_list_portal_vlan, list)
     {
         if (vlan_id == vlan->vlan_id)
@@ -200,18 +218,19 @@ int32 portal_vlan_add(const uint16 vlan_id,
     {
         vlan = (portal_vlan_t *)malloc(sizeof(*vlan));
         ASSERT(NULL != vlan);
+        bzero(vlan, sizeof(*vlan));
         vlan->vlan_id = vlan_id;
         strcpy(vlan->url, url);
         atomic_set(&vlan->refcnt, 1);
         list_add_tail(&vlan->list, &s_list_portal_vlan);
         ++s_portal_vlan_count;
-        spinlock_unlock(&s_spinlock_list_portal_vlan);
+        rwlock_wrunlock_bh(&s_rwlock_list_portal_vlan);
         LOGGING_INFO("Apply portal '%s' to the vlan '%u' successfully.", url, vlan_id);
         return 0;
     }
     else
     {
-        spinlock_unlock(&s_spinlock_list_portal_vlan);
+        rwlock_wrunlock_bh(&s_rwlock_list_portal_vlan);
         DB_WAR("Apply portal '%s' to the vlan '%u' failure, "
             "Because the portal '%s' has been applied on the vlan '%u'.", 
             url, vlan_id, vlan->url, vlan->vlan_id);
@@ -222,18 +241,23 @@ int32 portal_vlan_add(const uint16 vlan_id,
     }
 }
 
-static inline void __portal_vlan_delete(portal_vlan_t *vlan)
+static inline void __portal_vlan_delete_bh(portal_vlan_t *vlan)
 {
-    if (atomic_dec_and_test(&vlan->refcnt))
-    {
-        LOGGING_INFO("Delete portal '%s' from the vlan '%u' successfully.", vlan->url, vlan->vlan_id);
-        list_del(&vlan->list);
-        free(vlan);
-        --s_portal_vlan_count;
-    }
+    if (unlikely(NULL == vlan))
+        return;
+    if (likely(atomic_read(&vlan->refcnt) == 1))
+        smp_rmb();
+    else if (likely(!atomic_dec_and_test(&vlan->refcnt)))
+        return;
+    LOGGING_INFO("Delete portal '%s' from the vlan '%u' successfully.", vlan->url, vlan->vlan_id);
+    rwlock_wrlock_bh(&s_rwlock_list_portal_vlan);
+    list_del(&vlan->list);
+    free(vlan);
+    --s_portal_vlan_count;
+    rwlock_wrunlock_bh(&s_rwlock_list_portal_vlan);
 }
 
-void portal_vlan_delete(const uint16 vlan_id)
+void portal_vlan_delete_bh(const uint16 vlan_id)
 {
     portal_vlan_t *vlan = NULL;
     if (vlan_id <= 0)
@@ -242,17 +266,17 @@ void portal_vlan_delete(const uint16 vlan_id)
         LOGGING_ERR("Delete portal from the vlan failure with invalid parameter. vlan_id[%u].", vlan_id);
         return ;
     }
-    spinlock_lock(&s_spinlock_list_portal_vlan);
+    rwlock_rdlock_bh(&s_rwlock_list_portal_vlan);
     list_for_each_entry(vlan, &s_list_portal_vlan, list)
     {
         if (vlan_id == vlan->vlan_id)
             break;
     }
+    rwlock_rdunlock_bh(&s_rwlock_list_portal_vlan);
     if (NULL != vlan && &s_list_portal_vlan != &vlan->list)
-        __portal_vlan_delete(vlan);
+        __portal_vlan_delete_bh(vlan);
     else
         LOGGING_WARNING("There is not applied portal to the vlan '%u'.", vlan_id);
-    spinlock_unlock(&s_spinlock_list_portal_vlan);
 }
 
 portal_vlan_t *portal_vlan_get(const uint16 vlan_id)
@@ -260,7 +284,7 @@ portal_vlan_t *portal_vlan_get(const uint16 vlan_id)
     portal_vlan_t *vlan = NULL;
     if (vlan_id <= 0)
         return NULL;
-    spinlock_lock(&s_spinlock_list_portal_vlan);
+    rwlock_rdlock(&s_rwlock_list_portal_vlan);
     list_for_each_entry(vlan, &s_list_portal_vlan, list)
     {
         if (vlan_id == vlan->vlan_id)
@@ -270,18 +294,29 @@ portal_vlan_t *portal_vlan_get(const uint16 vlan_id)
         atomic_inc(&vlan->refcnt);
     else
         vlan = NULL;
-    spinlock_unlock(&s_spinlock_list_portal_vlan);
+    rwlock_rdunlock(&s_rwlock_list_portal_vlan);
     return vlan;
+}
+
+static inline void __portal_vlan_delete(portal_vlan_t *vlan)
+{
+    if (unlikely(NULL == vlan))
+        return;
+    if (likely(atomic_read(&vlan->refcnt) == 1))
+        smp_rmb();
+    else if (likely(!atomic_dec_and_test(&vlan->refcnt)))
+        return;
+    LOGGING_INFO("Delete portal '%s' from the vlan '%u' successfully.", vlan->url, vlan->vlan_id);
+    rwlock_wrlock(&s_rwlock_list_portal_vlan);
+    list_del(&vlan->list);
+    free(vlan);
+    --s_portal_vlan_count;
+    rwlock_wrunlock(&s_rwlock_list_portal_vlan);
 }
 
 void portal_vlan_put(portal_vlan_t *vlan)
 {
-    if (NULL != vlan)
-    {
-        spinlock_lock(&s_spinlock_list_portal_vlan);
-        __portal_vlan_delete(vlan);
-        spinlock_unlock(&s_spinlock_list_portal_vlan);
-    }
+    __portal_vlan_delete(vlan);
 }
 
 BOOL portal_vlan_exist(const uint16 vlan_id)
@@ -290,7 +325,7 @@ BOOL portal_vlan_exist(const uint16 vlan_id)
     BOOL exist = FALSE;
     if (vlan_id <= 0)
         return exist;
-    spinlock_lock(&s_spinlock_list_portal_vlan);
+    rwlock_rdlock(&s_rwlock_list_portal_vlan);
     list_for_each_entry(vlan, &s_list_portal_vlan, list)
     {
         if (vlan_id == vlan->vlan_id)
@@ -299,7 +334,7 @@ BOOL portal_vlan_exist(const uint16 vlan_id)
             break;
         }
     }
-    spinlock_unlock(&s_spinlock_list_portal_vlan);
+    rwlock_rdunlock(&s_rwlock_list_portal_vlan);
     return exist;
 }
 
@@ -376,15 +411,23 @@ static ssize_t portal_interface_proc_read(struct file *file,
 static int32 portal_interface_proc_open(struct inode *inode, 
                                         struct file *file)
 {
-    file->private_data = (void *)&s_list_portal_interface;
-    spinlock_lock(&s_spinlock_list_portal_interface);
+    portal_interface_t *interface;
+    /*在此处先将所有的interface的引用+1,避免在read过程中出现interface被删除,从而造成指针访问出错*/
+    rwlock_rdlock_bh(&s_rwlock_list_portal_interface);
+    list_for_each_entry(interface, &s_list_portal_interface, list)
+        atomic_inc(&interface->refcnt);;
+    rwlock_rdunlock_bh(&s_rwlock_list_portal_interface);
+    file->private_data = &s_list_portal_interface;
     return 0;
 }
 
 static int32 portal_interface_proc_close(struct inode *inode, 
                                          struct file *file)
 {
-    spinlock_unlock(&s_spinlock_list_portal_interface);
+    portal_interface_t *interface, *ineterface_next;
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(interface, ineterface_next, &s_list_portal_interface, list)
+        portal_interface_delete_bh(interface->ifname);
     file->private_data = NULL;
     return 0;
 }
@@ -460,15 +503,23 @@ static ssize_t portal_vlan_proc_read(struct file *file,
 static int32 portal_vlan_proc_open(struct inode *inode, 
                                    struct file *file)
 {
-    file->private_data = (void *)&s_list_portal_vlan;
-    spinlock_lock(&s_spinlock_list_portal_vlan);
+    portal_vlan_t *vlan;
+    /*在此处先将所有的vlan的引用+1,避免在read过程中出现vlan被删除,从而造成指针访问出错*/
+    rwlock_rdlock_bh(&s_rwlock_list_portal_vlan);
+    list_for_each_entry(vlan, &s_list_portal_vlan, list)
+        atomic_inc(&vlan->refcnt);;
+    rwlock_rdunlock_bh(&s_rwlock_list_portal_vlan);
+    file->private_data = &s_list_portal_vlan;
     return 0;
 }
 
 static int32 portal_vlan_proc_close(struct inode *inode, 
                                     struct file *file)
 {
-    spinlock_unlock(&s_spinlock_list_portal_vlan);
+    portal_vlan_t *vlan, *vlan_next;
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(vlan, vlan_next, &s_list_portal_vlan, list)
+        portal_vlan_delete_bh(vlan->vlan_id);
     file->private_data = NULL;
     return 0;
 }

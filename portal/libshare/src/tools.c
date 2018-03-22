@@ -45,6 +45,14 @@ int str2mac(char *str, unsigned char *mac)
 	return 0;
 }
 
+int macformat(char *mac, char split)
+{
+	int i = 0;
+	for (i = 0; i < 5; i++) {
+		mac[(i+1)*3-1] = split;
+	}
+	return 0;
+}
 void urlencode(const unsigned char *s, char *t) 
 {
     const unsigned char *p = s;

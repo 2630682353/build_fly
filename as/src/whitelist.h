@@ -29,6 +29,7 @@ typedef struct whitelist_st{
 int32 whitelist_init(const uint32 maxcount);
 void whitelist_destroy(void);
 int32 whitelist_add(whitelist_t *white);
+void whitelist_del_bh(const void *mac);
 void whitelist_del(whitelist_t *white);
 whitelist_t *whitelist_get(whitelist_t *white);
 void whitelist_put(whitelist_t *white);

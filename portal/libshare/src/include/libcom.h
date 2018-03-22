@@ -10,6 +10,7 @@ typedef struct user_query_info
 	int vlan;
 	int if_exist;
 	char user_ip[32];
+	char user_agent[256];
 	struct list_head user_list;
 }user_query_info_t;
 

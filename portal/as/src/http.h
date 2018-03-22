@@ -46,31 +46,11 @@ static inline struct sk_buff *http_skb_alloc(const struct sk_buff *skb,
     nskb->dev = skb->dev;
     nskb->protocol = skb->protocol;
     return nskb;
-/*
-    uint32 nskb_size;
-    struct sk_buff *nskb = NULL;
-    nskb_size = sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct tcphdr) + size;
-    nskb = alloc_skb(nskb_size, GFP_KERNEL);
-    if (NULL == nskb)
-        return NULL;
-    skb_put(nskb, nskb_size);
-    skb_reset_mac_header(nskb);
-    skb_pull(nskb, sizeof(struct ethhdr));
-    skb_reset_network_header(nskb);
-    nskb->dev = skb->dev;
-    nskb->protocol = htons(ETH_P_IP);
-    return nskb;*/
 }
 
 static inline void http_mac_header_fill(struct sk_buff *skb1,
                                         const struct sk_buff *skb2)
-{/*
-    struct ethhdr *ethh1 = eth_hdr(skb1);
-    struct ethhdr *ethh2 = eth_hdr(skb2);
-    memcpy(ethh1->h_dest, ethh2->h_source, sizeof(ethh1->h_dest));
-    memcpy(ethh1->h_source, ethh2->h_dest, sizeof(ethh1->h_source));
-    ethh1->h_proto = ethh2->h_proto;*/
-    
+{
     if (skb_from_vlan_dev(skb2))
     {
         struct vlan_ethhdr *vethh1 = vlan_eth_hdr(skb1);
@@ -127,11 +107,7 @@ static inline void http_transport_header_fill(struct sk_buff *skb1,
     uint32 tcpd2_len;
     uint32 tcph1_len;
     __wsum tcph1_csum;
-/*
-    if (tcph2->syn || tcph2->fin)
-        tcpd2_len = 1;
-    else
-        tcpd2_len = ntohs(iph2->tot_len) - (iph2->ihl * 4) - (tcph2->doff * 4);*/
+
     tcpd2_len = ntohs(iph2->tot_len) - (iph2->ihl * 4) - (tcph2->doff * 4);
     if (tcph2->syn || tcph2->fin)
         tcpd2_len += 1;
@@ -184,7 +160,6 @@ static inline int32 http_skb_xmit(struct sk_buff *skb)
     else
         skb_push(skb, sizeof(struct ethhdr));
     
-    //skb_push(skb, sizeof(struct ethhdr));
     ret = dev_queue_xmit(skb);
     if (0 != ret)
     {

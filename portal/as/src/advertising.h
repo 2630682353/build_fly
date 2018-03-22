@@ -51,6 +51,9 @@ int32 advertising_init(const uint32 max_push,
                        const uint32 max_embed);
 void advertising_destroy(void);
 int32 advertising_add(advertising_t *ads);
+/*本接口是提供给GMP调用删除ads用的*/
+void advertising_del_bh(const uint32 id,
+                        const int32 type);
 void advertising_del(advertising_t *ads);
 advertising_t *advertising_get(advertising_t *ads);
 void advertising_put(advertising_t *ads);

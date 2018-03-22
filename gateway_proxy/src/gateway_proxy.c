@@ -3,19 +3,25 @@
 #include <signal.h>
 #include    "cJSON.h"
 #include	"message.h"
-#include    "http_call.h"
 #include    "nlk_ipc.h"
 #include    "log.h"
 #include    "def.h"
 #include    "list.h"
+#include    "uci_fn.h"
+#include    "tools.h"
+#include    "cpu.h"
 #include <errno.h>
 #include <fcntl.h>
 #include "timer.h"
 #include "libcom.h"
 #include <sys/wait.h>
-
+#include <unistd.h>
+#include <curl/curl.h>
+#include <sys/sysinfo.h> 
 
 #define MAX_JSON_LEN 2048
+
+#define TEXT_STR "您的服务码是：%06d【华数WIFI】"
 
 #define GMC_URL_HEART "http://192.168.1.81:8888/gateway/heartbeat"   
 //"http://192.168.20.1:81/cgi-bin/temp_cgi?opt=check_login"
@@ -30,6 +36,7 @@
 #define SYSBIN_FILE "/tmp/openwrt-ramips-mt7621-mt7621-squashfs-sysupgrade.bin"
 
 #define PORTAL_WEB_DIR "/www/"
+#define HTTP_TIMEOUT  5
 
 enum task_id {
 	TASK_SYSTEM_REBOOT   = 100,
@@ -45,6 +52,8 @@ static LIST_HEAD(query_user_list);
 pthread_mutex_t query_mutex;
 pthread_mutex_t text_mutex;
 pthread_mutex_t authing_mutex;
+static int heart_beat_interval = 60;
+static int queryuser_cache_time = 60;
 
 typedef struct portal_cfg_st{
     int32 apply;/*0:interface; 1:vlan*/
@@ -78,6 +87,9 @@ typedef struct gateway_info {
 	int disk_available;
 	char wan_ip[20];
 	char lan_ip[20];
+	char v3_ip[20];
+	char v4_ip[20];
+	char v5_ip[20];
 	int date;
 	int uptime;
 	
@@ -122,29 +134,66 @@ typedef struct token_info_st{
 
 static token_info_t gw_token;
 
-int http_send(char *url, cJSON *send, cJSON **recv)
+int report_task(int id, int code,int result, char *msg);
+int gateway_info_update();
+
+size_t receive_data(void *buffer, size_t size, size_t nmemb, void *receive_buf) {
+	int origin_len = strlen(receive_buf);
+	int rlen = size*nmemb;
+    memcpy((char *)receive_buf + origin_len, buffer, rlen);
+	((char *)receive_buf)[rlen + origin_len] = '\0';
+    return rlen;
+}
+
+
+int http_send(char *url, cJSON *send, cJSON **recv, char *http_headers[])
 {
-	int ret = -1, rlen = 0;
+	int ret = -1;
 	char *jstr = NULL, *back_str = NULL;
 	cJSON *obj = NULL;
-	char cmd[4096] = {0};
 	back_str = (char*)malloc(4096);
+	memset(back_str, 0, 4096);
+	
+	char header_str[256] = {0};
+
+	struct curl_slist *headers = NULL;
+	CURLcode res = CURLE_OK;
+	CURL *mycurl = curl_easy_init();
+	snprintf(header_str, sizeof(header_str) - 1, "DevMac: %s", gateway.mac);
+	headers = curl_slist_append(headers, header_str);
+	if (http_headers) {
+		int i = 0;
+		while (http_headers[i]) {
+			headers = curl_slist_append(headers, http_headers[i]);
+			i++;
+		}
+
+	}
+		
+	if (!mycurl)
+		goto out;
+	curl_easy_setopt(mycurl, CURLOPT_URL, url);
+	curl_easy_setopt(mycurl, CURLOPT_TIMEOUT, HTTP_TIMEOUT); 
+	curl_easy_setopt(mycurl, CURLOPT_WRITEFUNCTION, receive_data);
+	curl_easy_setopt(mycurl, CURLOPT_WRITEDATA, back_str);
+	
 	if (!send) {
-		snprintf(cmd, sizeof(cmd) - 1, "curl --connect-timeout 2 -m 2 -s -H \"DevMac: %s\" %s", 
-		gateway.mac, url);
+		curl_easy_setopt(mycurl, CURLOPT_HTTPHEADER, headers);
+		res = curl_easy_perform(mycurl);
+
 	} else {
+		snprintf(header_str, sizeof(header_str) - 1, "Content-Type:application/json");
+		headers = curl_slist_append(headers, header_str); 
 		jstr = cJSON_PrintUnformatted(send); 
 		printf("http send %s\n", jstr);
-		snprintf(cmd, sizeof(cmd) - 1, 
-		"curl --connect-timeout 2 -m 2 -s -H \"Content-Type:application/json\" -H \"DevMac: %s\" -X POST --data '%s' %s", 
-		gateway.mac, jstr, url);
+		curl_easy_setopt(mycurl, CURLOPT_HTTPHEADER, headers); 
+		curl_easy_setopt(mycurl, CURLOPT_POSTFIELDS, jstr); 
+		res = curl_easy_perform(mycurl);
 	}
-	rlen = shell_printf(cmd, back_str, 4096);
-	if (rlen <= 0) {
-		GATEWAY_LOG("http return null\n");
-		printf("http return null\n");
+	if (res != CURLE_OK) {
+		printf("curl_easy_perform() failed: %d\n", res);
 		goto out;
-	}
+    }
 	printf("http recv %s\n", back_str);
 	obj = cJSON_Parse(back_str);
 	if (!obj)
@@ -159,27 +208,43 @@ int http_send(char *url, cJSON *send, cJSON **recv)
 out:
 	if (back_str)
 		free(back_str);
+	if (jstr)
+		free(jstr);
 	if (ret)
 		recv = NULL;
+	if (headers)
+		curl_slist_free_all(headers);
+	curl_easy_cleanup(mycurl);
 	return ret;
 }
 
 int get_token()
 {
 	char *back_str = NULL;
-	char cmd_token[1024] = {0};
-	int ret = -1, rlen = 0;
+	char temp_url[1024] = {0};
+	int ret = -1;
 	cJSON *obj = NULL;
 	back_str = (char*)malloc(4096);
+	memset(back_str, 0, 4096);
 	gw_token.token_time = time(NULL);
 
-	snprintf(cmd_token, sizeof(cmd_token) - 1, 
-	"curl --connect-timeout 2 -m 2 -s %s%d", TOKEN_URL, gw_token.token_time);
-	rlen = shell_printf(cmd_token, back_str, 4096);
-	if (!back_str) {
-		GATEWAY_LOG("http request return null\n");
+
+	CURLcode res = CURLE_OK;
+	CURL *mycurl = curl_easy_init();
+	snprintf(temp_url, sizeof(temp_url) - 1, "%s%d", TOKEN_URL, gw_token.token_time);
+
+	if (!mycurl)
 		goto out;
-	}
+	curl_easy_setopt(mycurl, CURLOPT_URL, temp_url);
+	curl_easy_setopt(mycurl, CURLOPT_TIMEOUT, HTTP_TIMEOUT); 
+	curl_easy_setopt(mycurl, CURLOPT_WRITEFUNCTION, receive_data);
+	curl_easy_setopt(mycurl, CURLOPT_WRITEDATA, back_str);
+	res = curl_easy_perform(mycurl);
+
+	if (res != CURLE_OK) {
+		printf("get tocken curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		goto out;
+    }
 	printf("token back: %s\n", back_str);
 	obj = cJSON_Parse(back_str);
 	if (!obj)
@@ -198,6 +263,7 @@ out:
 		cJSON_Delete(obj);
 	if (back_str)
 		free(back_str);
+	curl_easy_cleanup(mycurl);
 	return ret;
 }
 
@@ -227,7 +293,7 @@ int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, in
 
 	user_query_info_t *user_info = (user_query_info_t *)ibuf;
 	user_query_info_t *p;
-
+	/*已经查询过直接返回结果，查询信息在网关心跳里清空*/
 	pthread_mutex_lock(&query_mutex);
 	list_for_each_entry(p, &query_user_list, user_list) {
 		if (strcmp(user_info->mac, p->mac) == 0 && user_info->auth_type == p->auth_type) {
@@ -245,7 +311,10 @@ int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, in
 
 	snprintf(url, sizeof(url) - 1, "%s%d/%s", USER_QUERY_URL, 
 		gw_token.token_time, gw_token.token_val);
-	ret = http_send(url, root, &obj);
+
+	char *headers[2] = {user_info->user_agent, NULL};
+	
+	ret = http_send(url, root, &obj, headers);
 	
 	user_query_info_t *qu = (user_query_info_t *)obuf;
 	memcpy(qu, user_info, sizeof(user_query_info_t));
@@ -269,7 +338,6 @@ int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, in
 		memcpy(query_cache, qu, sizeof(user_query_info_t));
 		pthread_mutex_lock(&query_mutex);
 		list_add(&query_cache->user_list, &query_user_list);
-		printf("q add\n");
 		pthread_mutex_unlock(&query_mutex);
 	} else if (ret == 1) {
 		strncpy(qu->mac, user_info->mac, sizeof(qu->mac) - 1);
@@ -302,6 +370,7 @@ int32 user_register_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	char url[128] = {0};
 	user_query_info_t *user_info = ibuf;
 	user_query_info_t *p = NULL, *n = NULL;
+	/*验证码比较*/
 	pthread_mutex_lock(&text_mutex);
 	list_for_each_entry_safe(p, n, &tel_text_users, user_list) {
 		if (strcmp(user_info->username, p->username) == 0 && 
@@ -313,8 +382,10 @@ int32 user_register_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 		}
 	}
 	pthread_mutex_unlock(&text_mutex);
-	if (!matched)
+	if (!matched) {
+		ret = 3;
 		goto out;
+	}
 	root = cJSON_CreateObject();
 	
 	cJSON_AddStringToObject(root, "userMac", user_info->mac);
@@ -329,13 +400,13 @@ int32 user_register_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	snprintf(url, sizeof(url) - 1, "%s%d/%s", USER_REGISTER_URL, 
 		gw_token.token_time, gw_token.token_val);
 
-	if ((ret = http_send(url, root, &obj)))
+	if ((ret = http_send(url, root, &obj, NULL)))
 		goto out;
 
 	cJSON *result = cJSON_GetObjectItem(obj, "result");
 	if (!result || result->valueint)
 		goto out;
-
+	/*删除查询用户不存在信息*/
 	pthread_mutex_lock(&query_mutex);
 	list_for_each_entry_safe(p, n, &query_user_list, user_list) {
 		if (strcmp(user_info->mac, p->mac) == 0 && user_info->auth_type == p->auth_type) {
@@ -360,11 +431,10 @@ out:
 
 int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
 {
-	int ret = -1, rlen = 0, verify_code = 0;
+	int ret = -1, verify_code = 0;
 	cJSON *root = NULL, *obj = NULL;
 	char *jstr = NULL, *back_str = NULL;
-	char url[128] = {0}, code_str[64] = {0};
-	char cmd_text[2048] = {0};
+	char code_str[64] = {0};
 	root = cJSON_CreateObject();
 
 	user_query_info_t *user_info = ibuf;
@@ -376,25 +446,33 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	
 	verify_code = time(NULL); 
 	verify_code = verify_code%1000000;
-	snprintf(code_str, sizeof(code_str) - 1, "您的服务码是：%06d【华数WIFI】", verify_code);
+	snprintf(code_str, sizeof(code_str) - 1, TEXT_STR, verify_code);
 	cJSON_AddStringToObject(root, "msg", code_str);
 	
-//	if ((ret = http_send(TEXT_CODE_URL, root, &obj)))
-//		goto out;
 	jstr = cJSON_PrintUnformatted(root);
-	back_str = (char*)malloc(4096);
-	
-	snprintf(cmd_text, sizeof(cmd_text) - 1, 
-		"curl --connect-timeout 2 -m 2 -s -H \"Content-Type:application/json\" -H \"DevMac: %s\" -X POST --data '%s' %s", 
-		gateway.mac, jstr, TEXT_CODE_URL);
-
-	rlen = shell_printf(cmd_text, back_str, 4096);
 	printf("http send %s\n", jstr);
-	if (rlen <= 0) {
-		GATEWAY_LOG("http return null\n");
-		printf("return null\n");
+	back_str = (char*)malloc(4096);
+	memset(back_str, 0, 4096);
+	
+	struct curl_slist *headers = NULL;
+	CURLcode res = CURLE_OK;
+	CURL *mycurl = curl_easy_init();
+	headers = curl_slist_append(headers, "Content-Type:application/json");
+	if (!mycurl)
 		goto out;
-	}
+	curl_easy_setopt(mycurl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(mycurl, CURLOPT_URL, TEXT_CODE_URL);
+	curl_easy_setopt(mycurl, CURLOPT_TIMEOUT, HTTP_TIMEOUT); 
+	curl_easy_setopt(mycurl, CURLOPT_WRITEFUNCTION, receive_data);
+	curl_easy_setopt(mycurl, CURLOPT_WRITEDATA, back_str);
+	curl_easy_setopt(mycurl, CURLOPT_POSTFIELDS, jstr); 
+	res = curl_easy_perform(mycurl);
+
+	if (res != CURLE_OK) {
+		printf("send txtcode curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		goto out;
+    }
+	
 	printf("http recv %s\n", back_str);
 	obj = cJSON_Parse(back_str);
 
@@ -405,7 +483,7 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	*olen = 0;
 	user_query_info_t *need_verify = malloc(sizeof(user_query_info_t));
 	memcpy(need_verify, user_info, sizeof(user_query_info_t));
-	snprintf(need_verify->password, sizeof(need_verify->password) - 1, "%6d", verify_code);
+	snprintf(need_verify->password, sizeof(need_verify->password) - 1, "%06d", verify_code);
 	user_query_info_t *p = NULL;
 	int matched = 0;
 
@@ -433,6 +511,9 @@ out:
 		cJSON_Delete(obj);
 	if (ret)
 		*olen = 0;
+	if (headers)
+		curl_slist_free_all(headers);
+	curl_easy_cleanup(mycurl);
 	return ret;
 }
 
@@ -445,7 +526,7 @@ void sig_hander( int sig )
 	errno = save_errno;
 } 
 
-int portal_wget(int id, int code, unsigned char *md5, char *url)
+int portal_wget(int id, int code, char *md5, char *url)
 {
 	int i = 0, pid = -1;
 	char cmd[512];
@@ -475,10 +556,12 @@ int portal_wget(int id, int code, unsigned char *md5, char *url)
 		sprintf(&cmd[i*2], "%02X", temp_md5[i]);
 	if (strncasecmp(cmd, md5, 32)) {
 			GATEWAY_LOG("MD5ERR:\n%s\n%s\n", cmd, md5);
-			strncpy(push_msg, sizeof(push_msg) - 1, "md5 check err");
+			strncpy(push_msg, "md5 check err", sizeof(push_msg) - 1);
 			goto err;
 	}
-	snprintf(cmd, sizeof(cmd), "tar -zxvf %s -C %s",
+	snprintf(cmd, sizeof(cmd) - 1, "rm -rf %s/portal");
+	system(cmd);
+	snprintf(cmd, sizeof(cmd) - 1, "tar -zxvf %s -C %s",
 			PORTAL_FILE, PORTAL_WEB_DIR);
 	system(cmd);
 	report_task(id, code, 0, NULL);
@@ -493,7 +576,7 @@ err:
 	
 }
 
-int sysbin_wget(int id, int code, unsigned char *md5, char *url)
+int sysbin_wget(int id, int code, char *md5, char *url)
 {
 	int i = 0, pid = -1;
 	char cmd[512];
@@ -523,7 +606,7 @@ int sysbin_wget(int id, int code, unsigned char *md5, char *url)
 		sprintf(&cmd[i*2], "%02X", temp_md5[i]);
 	if (strncasecmp(cmd, md5, 32)) {
 			GATEWAY_LOG("MD5ERR:\n%s\n%s\n", cmd, md5);
-			strncpy(push_msg, sizeof(push_msg) - 1, "md5 check err");
+			strncpy(push_msg, "md5 check err", sizeof(push_msg) - 1);
 			goto err;
 	}
 	report_task(id, code, 0, NULL);
@@ -558,7 +641,7 @@ int report_task(int id, int code,int result, char *msg) {
 	cJSON_AddItemToArray(task_arr, obj);
 
 	cJSON_AddItemToObject(root, "taskList",task_arr);
-	if ((ret = http_send(GMC_URL_RESULT, root, &obj)))
+	if ((ret = http_send(GMC_URL_RESULT, root, &obj, NULL)))
 		goto out;
 	
 out:
@@ -578,7 +661,7 @@ int do_task(cJSON *task_list)
 	cJSON *download_url = NULL;
 	
 	char *bask_str = (char*)malloc(4096);
-	char cmd_task[4096] = {0};
+//	char cmd_task[4096] = {0};
 	int rlen = 0;
 	while (child_item) {
 		task_id = cJSON_GetObjectItem(child_item, "id");
@@ -634,17 +717,15 @@ int do_task(cJSON *task_list)
 
 int send_heart_beat()
 {
-	//char report_data[MAX_JSON_LEN] = "report_data=";
-	//char encode_report[MAX_JSON_LEN] = {0};
-	int ret = -1, rlen = 0, status = 0, w_pid = 0;
+
+	int ret = -1, status = 0, w_pid = 0;
 	cJSON *root = NULL, *obj = NULL;
-	char url[128] = {0};
 	if (!gw_token.if_lgoin)
 		get_token();
 	gateway_info_update();
-	query_list_clear();
+	
 	w_pid = waitpid(-1, &status, WNOHANG);
-	printf("wait pid hhhhhhhhhhhhhhhhhhhhhhhhhhhh = %d\n", w_pid);
+//	printf("wait pid hhhhhhhhhhhhhhhhhhhhhhhhhhhh = %d\n", w_pid);
 	root = cJSON_CreateObject();
 	
 //	cJSON_AddStringToObject(root, "stage", "heartbeat");
@@ -664,7 +745,7 @@ int send_heart_beat()
 	cJSON_AddNumberToObject(root, "date", gateway.date);
 	cJSON_AddNumberToObject(root, "uptime", gateway.uptime);
 	
-	if ((ret = http_send(GMC_URL_HEART, root, &obj)))
+	if ((ret = http_send(GMC_URL_HEART, root, &obj, NULL)))
 		goto out;
 
 	cJSON *result = cJSON_GetObjectItem(obj, "result");
@@ -691,6 +772,16 @@ int gateway_info_init()
 	char temp_disk[10] = {0};
 	time_t rawtime;
 	struct sysinfo info;
+
+	if (!uuci_get("acct_config.gateway_base.heartbeat_interval", &array, &num)) {
+		heart_beat_interval = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+
+	if (!uuci_get("acct_config.gateway_base.queryuser_cache_time", &array, &num)) {
+		queryuser_cache_time = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
 	
 	if (!uuci_get("network.wan.macaddr", &array, &num)) {
 		arr_strcpy(gateway.mac, array[0]);
@@ -718,6 +809,18 @@ int gateway_info_init()
 	}
 	if (!uuci_get("network.lan.ipaddr", &array, &num)) {
 		arr_strcpy(gateway.lan_ip, array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("network.V3.ipaddr", &array, &num)) {
+		arr_strcpy(gateway.v3_ip, array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("network.V4.ipaddr", &array, &num)) {
+		arr_strcpy(gateway.v4_ip, array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("network.V5.ipaddr", &array, &num)) {
+		arr_strcpy(gateway.v5_ip, array[0]);
 		uuci_get_free(array, num);
 	}
 
@@ -776,10 +879,9 @@ int gateway_info_update()
 	return 0;
 }
 
-unsigned int black_white_mac[6] = {0};
-
 void black_white_list_add_send()
 {
+	unsigned char black_white_mac[6] = {0};
 	char **array = NULL;
 	int num = 0, i = 0;
 	if (!uuci_get("acct_config.total_config.black_white_enable", &array, &num)) {
@@ -814,6 +916,7 @@ void black_white_list_add_send()
 		
 }
 
+/*
 void black_list_del_send()
 {
 	if (msg_send_syn( MSG_CMD_AS_BLACKLIST_DELETE, black_white_mac, sizeof(black_white_mac), NULL, NULL) != 0) {
@@ -822,12 +925,12 @@ void black_list_del_send()
 			printf("black delete success\n");
 			}
 }
+*/
 
 advertising_cfg_t temp_adv;
 void add_advertise()
 {
 	char **array = NULL;
-	char *res;
 	int num = 0, i = 0;
 	int adv_size = 0;
 	if (!uuci_get("acct_config.total_config.advertise_enable", &array, &num)) {
@@ -955,15 +1058,6 @@ int portal_url_set()
 {
 	portal_cfg_t portal;
 	portal.apply = 1;
-	portal.vlan_id = 3;
-	snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.lan_ip);
-	
-	if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
-		printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
-	}else {
-		printf("MSG_CMD_AS_PORTAL_URL_SET success \n");
-	}
-	portal.apply = 1;
 	portal.vlan_id = 1;
 	snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.lan_ip);
 	
@@ -972,6 +1066,71 @@ int portal_url_set()
 	}else {
 		printf("MSG_CMD_AS_PORTAL_URL_SET success \n");
 	}
+	if (gateway.v3_ip[0] != '\0') {
+		portal.apply = 1;
+		portal.vlan_id = 3;
+		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v3_ip);
+		
+		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
+			printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+		}else {
+			printf("MSG_CMD_AS_PORTAL_URL_SET V3 success \n");
+		}
+	}
+	if (gateway.v4_ip[0] != '\0') {
+		portal.apply = 1;
+		portal.vlan_id = 4;
+		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v4_ip);
+		
+		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
+			printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+		}else {
+			printf("MSG_CMD_AS_PORTAL_URL_SET V4  success \n");
+		}
+	} 
+	if (gateway.v5_ip[0] != '\0') {
+		portal.apply = 1;
+		portal.vlan_id = 5;
+		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v5_ip);
+		
+		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
+			printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+		}else {
+			printf("MSG_CMD_AS_PORTAL_URL_SET V5 success \n");
+		}
+	} 
+	return 0;
+
+}
+
+int setnonblocking(int fd)
+{
+	int old_option = fcntl(fd, F_GETFL);
+	int new_option = old_option | O_NONBLOCK;
+	fcntl(fd, F_SETFL, new_option);
+	return old_option;
+}
+
+int gateway_sig_init()
+{
+	sigset_t sig;
+
+	sigemptyset(&sig);
+	sigaddset(&sig, SIGABRT);
+	sigaddset(&sig, SIGPIPE);
+	sigaddset(&sig, SIGQUIT);
+	sigaddset(&sig, SIGUSR1);
+	sigaddset(&sig, SIGUSR2);
+	sigaddset(&sig, SIGHUP);
+	sigaddset(&sig, SIGALRM);
+	pthread_sigmask(SIG_BLOCK, &sig, NULL);
+	
+	signal(SIGINT, sig_hander);
+	signal(SIGTERM, sig_hander);
+//	signal(SIGBUS, sig_hander);
+//	signal(SIGFPE, sig_hander);
+//	signal(SIGSEGV, sig_hander);
+	return 0;
 
 }
 
@@ -983,47 +1142,30 @@ int main (int argc, char **argv)
 	pthread_mutex_init(&query_mutex, NULL);
 	pthread_mutex_init(&text_mutex, NULL);
 	pthread_mutex_init(&authing_mutex, NULL);
+	gateway_sig_init();
 	ret = socketpair(PF_UNIX, SOCK_STREAM, 0, pipefd);
 	if (ret == -1)
 		return -1;
-	
+	setnonblocking(pipefd[1]);
 	msg_init(MODULE_MANAGE);
 	msg_cmd_register(MSG_CMD_MANAGE_USER_QUERY, user_query_handler);
 	msg_cmd_register(MSG_CMD_MANAGE_USER_REGISTER, user_register_handler);
 	msg_cmd_register(MSG_CMD_MANAGE_TEXT_SEND, send_tel_code_handler);
 	msg_dst_module_register_netlink(MODULE_AS);
 	msg_dst_module_register_unix(MODULE_RADIUS);
-	
-	signal(SIGINT, sig_hander);
-	signal(SIGTERM, sig_hander);
-	timer_list_init(1, sig_hander);
-	
+	curl_global_init(CURL_GLOBAL_ALL);
+
 	struct timeval tv;
 	fd_set fds;
 	int max_fd = 0;
-	add_timer(send_heart_beat, 2, 1, 60);
+	add_timer(send_heart_beat, 2, 1, heart_beat_interval);
+	add_timer(query_list_clear, 2, 1, queryuser_cache_time);
 	portal_url_set();
 	black_white_list_add_send();
 	add_advertise();
-//	add_timer(gateway_info_update, 1, 1, 5);
+
 	while (1) {
-//		gateway_info_update();
-//		if (send_heart_beat())
-//			printf("heart_beat error\n");
-//		else 
-//			printf("heart_beat success\n");
-//		sleep(20);
-
-//		sleep(20);
-//		black_list_add_send();
-//		sleep(20);
-//		black_list_del_send();
-//		add_timer(add_advertise, 60, 1, 120);
-//		add_timer(delete_advertise, 120, 1, 120);
-//		add_timer(set_adv_policy, 30, 1, 60);
-//		add_timer(query_adv_policy, 60, 1, 60);
-
-		tv.tv_sec = 60;
+		tv.tv_sec = 1;
 		tv.tv_usec = 0;
 		FD_ZERO(&fds);
 		FD_SET(pipefd[0], &fds);
@@ -1034,6 +1176,7 @@ int main (int argc, char **argv)
 			if (errno == EINTR || errno == EAGAIN)
 				continue;
 		}
+		
 		if (FD_ISSET(pipefd[0], &fds)) {
 			char signals[100];
 			ret = recv(pipefd[0], signals, sizelen(signals), 0);
@@ -1043,18 +1186,14 @@ int main (int argc, char **argv)
 					case SIGTERM:
 					case SIGINT:
 						msg_final(); 
+						curl_global_cleanup();
 						exit(0);
-						break;
-					case SIGALRM:
-						timer_handler();
 						break;
 					}
 				}
 			}
 		}
-
+		timer_handler();
 	}
-
 	return 0;
-
 }

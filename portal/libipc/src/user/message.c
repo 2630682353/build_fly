@@ -19,7 +19,6 @@
 #define PKT_POOL_UNITSIZE sizeof(msg_pkt_t)
 #define PKT_POOL_INITNUM 10
 #define PKT_POOL_GROWNUM 8
-#define RECV_FROM_TIMEOUT 3
 #define THREAD_NUM  3
 
 static int16 s_module_id = 0;

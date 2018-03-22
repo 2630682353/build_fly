@@ -3,7 +3,9 @@
 #include "debug.h"
 #include <linux/string.h>
 
-hashtab_t *hashtab_create(const hashtab_operate_t *ops)
+hashtab_t *hashtab_create(const hashtab_operate_t *ops,
+                          const uint32 nslot,
+                          const uint32 nelem)
 {
     hashtab_t *htab = NULL;
     if (NULL == ops || NULL == ops->hash || NULL == ops->keycmp)
@@ -16,8 +18,8 @@ hashtab_t *hashtab_create(const hashtab_operate_t *ops)
     bzero(htab, sizeof(*htab));
     memcpy(&htab->hash_ops, ops, sizeof(*ops));
     INIT_LIST_HEAD(&htab->slots);
-    htab->cache_slots = memcache_create(sizeof(hashtab_slot_t), 4);
-    htab->cache_elems = memcache_create(sizeof(hashtab_elem_t), 4);
+    htab->cache_slots = memcache_create(sizeof(hashtab_slot_t), nslot);
+    htab->cache_elems = memcache_create(sizeof(hashtab_elem_t), nelem);
     return htab;
 }
 

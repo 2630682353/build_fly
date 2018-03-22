@@ -1,8 +1,9 @@
 #include "list.h"
 #include <stdlib.h>
+#include <time.h>
 typedef struct util_timer_st {
 	time_t expire;
-	void (*cb_func)();
+	int (*cb_func)();
 	int loop;
 	int interval;
 	struct list_head list;

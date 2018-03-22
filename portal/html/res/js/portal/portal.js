@@ -22,7 +22,13 @@ function setCarouseImg(target,family){
             '</div>';
     }else if(family=='pc'){
         html+='<div class="item active">' +
-            '<img src="/static/portal/res/img/default/pc/pc_auth.jpg" alt="...">' +
+            '<img src="../../../portal/res/img/pc/pc_auth.jpg" alt="...">' +
+            '</div>'+
+            '<div class="item">' +
+            '<img  src="../../../portal/res/img/mobile/def_load.png" alt="...">' +
+            '</div>'+
+            '<div class="item">' +
+            '<img  src="../../../portal/res/img/mobile/def_full_1.png" alt="...">' +
             '</div>';
     }
     target.find('.carousel-inner').html(html);

@@ -32,6 +32,7 @@ define Package/portal/install
 	$(INSTALL_DIR) $(1)/www/cgi-bin
 	
 	$(CP) ./html/* $(1)/www/portal
+	$(CP) ./ads $(1)/www/
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/portal_cgi $(1)/www/cgi-bin
 endef
 

@@ -79,6 +79,7 @@ static void cpu_utilization_get(int8 *utilization)
     sprintf(utilization, "%llu.%llu", integer, decimals);
 }
 
+/*
 static void cpu_temperature_get(int8 *temperature)
 {
 #define CPU_TEMPERATURE_PATH    "/sys/class/thermal/thermal_zone0/temp"
@@ -99,6 +100,7 @@ static void cpu_temperature_get(int8 *temperature)
     else
         strcpy(temperature, "unsupport");
 }
+*/
 
 /*
 uint32 cpu_core_num_get(void)

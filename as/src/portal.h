@@ -24,7 +24,7 @@ typedef struct portal_interface_st{
 
 int32 portal_interface_add(const int8 *ifname,
                            const int8 *url);
-void portal_interface_delete(const int8 *ifname);
+void portal_interface_delete_bh(const int8 *ifname);
 portal_interface_t *portal_interface_get(const int8 *ifname);
 void portal_interface_put(portal_interface_t *interface);
 BOOL portal_interface_exist(const int8 *ifname);
@@ -38,7 +38,7 @@ typedef struct portal_vlan_st{
 }portal_vlan_t;
 int32 portal_vlan_add(const uint16 vlan_id,
                       const int8 *url);
-void portal_vlan_delete(const uint16 vlan_id);
+void portal_vlan_delete_bh(const uint16 vlan_id);
 portal_vlan_t *portal_vlan_get(const uint16 vlan_id);
 void portal_vlan_put(portal_vlan_t *vlan);
 BOOL portal_vlan_exist(const uint16 vlan_id);

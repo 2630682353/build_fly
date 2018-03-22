@@ -40,8 +40,6 @@ typedef enum logcmd_en{
 }logcmd_e;
 
 #ifdef LINUX_APP
-int32 klog_init(void);
-void klog_exit(void);
 void logging(const int32 level,
              int8 *fmt,...);
 #define LOGGING_CRIT(fmt,ARGS...)       logging(L_CRIT,fmt,##ARGS)
@@ -51,6 +49,9 @@ void logging(const int32 level,
 #define LOGGING_INFO(fmt,ARGS...)       logging(L_INFO,fmt,##ARGS)
 #define LOGGING_DEBUG(fmt,ARGS...)      logging(L_DEBUG,fmt,##ARGS)
 #elif defined(LINUX_KERNEL)
+int32 klog_init(void);
+void klog_exit(void);
+
 extern void klog_logging(const int32 level,
                          int8 *fmt,...);
 #define LOGGING_CRIT(fmt,ARGS...)       klog_logging(L_CRIT,fmt,##ARGS)

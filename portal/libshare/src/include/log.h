@@ -7,7 +7,7 @@ extern "C" {
 
 #include "type.h"
 #include <stdarg.h>
-
+#include <stdlib.h>
 
 #define CGI_LOG_PATH  "/tmp/cgi_log"
 #define IPC_LOG_PATH  "/tmp/ipc_log"

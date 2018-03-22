@@ -295,9 +295,9 @@ int msg_send_syn(int32 cmd, void *sbuf, int slen, void **obuf, int *olen)
 	tq->sn = msg->sn;
 	tq->rcv_skb = NULL;
 	init_waitqueue_head(&tq->waitq);
-	spin_lock(&wait_list_lock);
+	spin_lock_bh(&wait_list_lock);
 	list_add_tail(&tq->list, &wait_queue_list);
-	spin_unlock(&wait_list_lock);
+	spin_unlock_bh(&wait_list_lock);
 	
     memcpy(nlmsg_data(nlh) + sizeof(msg_t), sbuf, slen);
 	grp = MODULE_GET(cmd);
@@ -335,12 +335,12 @@ out:
 			*olen = 0;
 	}
 	if (tq) {
-		spin_lock(&wait_list_lock);
+		spin_lock_bh(&wait_list_lock);
 		list_del(&tq->list);
 		remove_wait_queue(&tq->waitq, &wait);
 		kfree(tq);
 		tq = NULL;
-		spin_unlock(&wait_list_lock);
+		spin_unlock_bh(&wait_list_lock);
 	}
 	if (nl_skb) 
 		nlmsg_free(nl_skb);

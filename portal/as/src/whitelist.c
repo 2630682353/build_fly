@@ -15,7 +15,8 @@ static memcache_t *sp_cache_data = NULL;
 static uint32 s_count = 0;
 static uint32 s_maxcount = 0;
 static LIST_HEAD(s_list_whitelist);
-static spinlock_t s_spinlock_list_whitelist;
+
+#define WHITELIST_HASH_SLOT_MAXCOUNT    (64)
 
 static uint32 whitelist_hash(const void *key)
 {
@@ -30,7 +31,7 @@ static uint32 whitelist_hash(const void *key)
         hash2 |= mac[2*i + 1];
         hash += hash2;
     }
-    return hash % 32;
+    return hash % WHITELIST_HASH_SLOT_MAXCOUNT;
 }
 
 static int32 whitelist_keycmp(const void *key1, const void *key2)
@@ -64,20 +65,16 @@ static int32 whitelist_datadup(void **dst, const void *src)
     atomic_set(&white->refcnt, 1);
     white->stats.uplink_pkts = white->stats.downlink_pkts = 0;
     spinlock_init(&white->lock);
-    spinlock_lock(&s_spinlock_list_whitelist);
     list_add_tail(&white->list, &s_list_whitelist);
     ++s_count;
-    spinlock_unlock(&s_spinlock_list_whitelist);
     return 0;
 }
 
 static void whitelist_datafree(void *data)
 {
     whitelist_t *white = (whitelist_t *)data;
-    spinlock_lock(&s_spinlock_list_whitelist);
     list_del(&white->list);
     --s_count;
-    spinlock_unlock(&s_spinlock_list_whitelist);
     spinlock_destroy(&white->lock);
     bzero(white, sizeof(*white));
     memcache_free(sp_cache_data, data);
@@ -97,7 +94,7 @@ int32 whitelist_init(const uint32 maxcount)
     s_count = 0;
     s_maxcount = maxcount;
     
-    sp_htab_whitelist = hashtab_create(&ops);
+    sp_htab_whitelist = hashtab_create(&ops, WHITELIST_HASH_SLOT_MAXCOUNT, maxcount);
     if (unlikely(NULL == sp_htab_whitelist))
     {
         DB_ERR("hashtab_create() call fail.");
@@ -105,15 +102,16 @@ int32 whitelist_init(const uint32 maxcount)
     }
     rwlock_init(&s_rwlock_whitelist);
     
-    sp_cache_key = memcache_create(HWADDR_SIZE, 4);
+    sp_cache_key = memcache_create(HWADDR_SIZE, maxcount);
     if (unlikely(NULL == sp_cache_key))
     {
         DB_ERR("memcache_create() call fail for cache-key.");
         hashtab_destroy(sp_htab_whitelist);
         sp_htab_whitelist = NULL;
         rwlock_destroy(&s_rwlock_whitelist);
+        return -1;
     }
-    sp_cache_data = memcache_create(sizeof(whitelist_t), 4);
+    sp_cache_data = memcache_create(sizeof(whitelist_t), maxcount);
     if (unlikely(NULL == sp_cache_data))
     {
         DB_ERR("memcache_create() call fail for cache-key.");
@@ -122,28 +120,25 @@ int32 whitelist_init(const uint32 maxcount)
         rwlock_destroy(&s_rwlock_whitelist);
         memcache_destroy(sp_cache_key);
         sp_cache_key = NULL;
+        return -1;
     }
-    spinlock_init(&s_spinlock_list_whitelist);
     return 0;
 }
 
 void whitelist_destroy(void)
 {
-    rwlock_wrlock(&s_rwlock_whitelist);
+    rwlock_wrlock_bh(&s_rwlock_whitelist);
     hashtab_destroy(sp_htab_whitelist);
     s_maxcount = 0;
     s_count = 0;
     sp_htab_whitelist = NULL;
-    rwlock_wrunlock(&s_rwlock_whitelist);
+    INIT_LIST_HEAD(&s_list_whitelist);
+    rwlock_wrunlock_bh(&s_rwlock_whitelist);
     rwlock_destroy(&s_rwlock_whitelist);
     memcache_destroy(sp_cache_key);
     sp_cache_key = NULL;
     memcache_destroy(sp_cache_data);
     sp_cache_data = NULL;
-    spinlock_lock(&s_spinlock_list_whitelist);
-    INIT_LIST_HEAD(&s_list_whitelist);
-    spinlock_unlock(&s_spinlock_list_whitelist);
-    spinlock_destroy(&s_spinlock_list_whitelist);
 }
 
 int32 whitelist_add(whitelist_t *white)
@@ -155,10 +150,10 @@ int32 whitelist_add(whitelist_t *white)
         return -1;
     }
     
-    rwlock_wrlock(&s_rwlock_whitelist);
+    rwlock_wrlock_bh(&s_rwlock_whitelist);
     if (unlikely(s_count >= s_maxcount))
     {
-        rwlock_wrunlock(&s_rwlock_whitelist);
+        rwlock_wrunlock_bh(&s_rwlock_whitelist);
         LOGGING_ERR("Add user to the whitelist table fail for whitelist full. count[%u], maxcount[%u]. "
                 "mac["MACSTR"].", s_count, s_maxcount, MAC2STR(white->mac));
         return -1;
@@ -166,16 +161,28 @@ int32 whitelist_add(whitelist_t *white)
     ret = hashtab_insert(sp_htab_whitelist, white->mac, white);
     if (unlikely(0 != ret))
     {
-        rwlock_wrunlock(&s_rwlock_whitelist);
+        rwlock_wrunlock_bh(&s_rwlock_whitelist);
         LOGGING_ERR("Add user to the whitelist table fail. "
                 "mac["MACSTR"].", MAC2STR(white->mac));
         return -1;
     }
-    rwlock_wrunlock(&s_rwlock_whitelist);
+    rwlock_wrunlock_bh(&s_rwlock_whitelist);
     LOGGING_INFO("Add user to the whitelist table successfully. "
             "mac["MACSTR"].", MAC2STR(white->mac));
     return 0;
 }
+
+void whitelist_del_bh(const void *mac)
+{
+    whitelist_t *white;
+    rwlock_wrlock_bh(&s_rwlock_whitelist);
+    white = (whitelist_t *)hashtab_search(sp_htab_whitelist, mac);
+    if (NULL != white && atomic_dec_and_test(&white->refcnt))
+        hashtab_delete(sp_htab_whitelist, white->mac);
+    rwlock_wrunlock_bh(&s_rwlock_whitelist);
+    LOGGING_INFO("Successful remove the user from the whitelist. mac["MACSTR"].", MAC2STR(mac));
+}
+
 
 void whitelist_del(whitelist_t *white)
 {
@@ -262,10 +269,12 @@ static ssize_t whitelist_read(struct file *file,
         if (unlikely(head->next == &s_list_whitelist))
             break;
         white = list_first_entry(head, whitelist_t, list);
+        spinlock_lock_bh(&white->lock);
         len = sprintf(tmp, MACSTR"  %llu  %llu\n", 
                 MAC2STR(white->mac), 
                 white->stats.uplink_pkts, 
                 white->stats.downlink_pkts);
+        spinlock_unlock_bh(&white->lock);
         if (unlikely((len + copyed) > size))
             break;
         copy_to_user(buf+copyed, tmp, len);
@@ -280,15 +289,23 @@ static ssize_t whitelist_read(struct file *file,
 static int32 whitelist_proc_open(struct inode *inode, 
                                  struct file *file)
 {
-    file->private_data = (void *)&s_list_whitelist;
-    spinlock_lock(&s_spinlock_list_whitelist);
+    whitelist_t *white;
+    /*在此处先将所有的white用户的引用+1,避免在read过程中出现white被删除,从而造成指针访问出错*/
+    rwlock_rdlock_bh(&s_rwlock_whitelist);
+    list_for_each_entry(white, &s_list_whitelist, list)
+        whitelist_get(white);
+    rwlock_rdunlock_bh(&s_rwlock_whitelist);
+    file->private_data = &s_list_whitelist;
     return 0;
 }
 
 static int32 whitelist_proc_close(struct inode *inode, 
                                   struct file *file)
 {
-    spinlock_unlock(&s_spinlock_list_whitelist);
+    whitelist_t *white, *white_next;
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(white, white_next, &s_list_whitelist, list)
+        whitelist_del_bh(white->mac);
     file->private_data = NULL;
     return 0;
 }

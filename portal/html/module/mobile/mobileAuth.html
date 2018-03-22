@@ -35,59 +35,6 @@
         }
     </style>
     <script type="text/javascript" src="../../../portal/lib/jquery/jquery.min.js"></script>
-    <script type="text/javascript">
-    var InterValObj; //timer变量，控制时间
-    var count = 60; //间隔函数，1秒执行
-    var curCount;//当前剩余秒数
-    var config = {
-        mobile:/^(13[0-9]|15[012356789]|17[0-9]|18[0-9]|14[57])[0-9]{8}$/
-    };
-    var getAuthTarget = $("#getAuth");
-        var xhr = function(){
-            if (window.XMLHttpRequest) {
-                return new XMLHttpRequest();
-            }else{
-                return new ActiveObject('Micrsorf.XMLHttp');
-            }
-        }();
-
-        function getMyAuthCode()
-        {
-            curCount = count;
-            var phone = $("#mobile").val();
-            var telReg = config.mobile.test(phone);
-            if(!phone){
-                authError("请输入手机号",mobileTag);
-                getAuthTarget.removeAttr("disabled");
-                return false;
-            }
-            if(!telReg) {
-                authError("手机号错误",mobileTag);
-                getAuthTarget.removeAttr("disabled");
-                return false;
-            }
-            var namev = document.getElementById("mobile").value;
-            xhr.open("GET", "/cgi-bin/portal_cgi?opt=text_code&name="+namev, true);
-            xhr.send(null);
-            authTip("服务码已发送至您的手机，一分钟内没收到短信，请重新获取服务码",mobileTag);
-            getAuthTarget.text("重获服务码" + curCount);
-            InterValObj = window.setInterval(setRemainTime, 1000);
-        }
-
-
-        function setRemainTime() {
-            if (curCount == 0) {
-                window.clearInterval(InterValObj);//停止计时器
-                getAuthTarget.removeAttr("disabled");//启用按钮
-                getAuthTarget.text("重获服务码");
-            }
-            else {
-                curCount--;
-                $("#getAuth").text("重获服务码" + curCount);
-            }
-        }
-
-</script>
 </head>
 <body>
 <div class="auth-container box-vertical">

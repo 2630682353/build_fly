@@ -253,7 +253,7 @@ function auth(event) {
 	}
 	
 	$.ajax({
-		type : 'POST',
+		type : 'GET',
 		url : myurl,
         data: null,
         success : function(data) {

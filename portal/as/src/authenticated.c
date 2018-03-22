@@ -24,13 +24,18 @@ static hashtab_t *sp_htab_auth = NULL;
 static rwlock_t s_rwlock_htab_auth;
 static memcache_t *sp_cache_key = NULL;
 static memcache_t *sp_cache_data = NULL;
-/*以auth->time.latest按从小到大的顺序排序*/
+/*以auth->time.start按从小到大的顺序排序*/
 static LIST_HEAD(s_list_auth);
-static spinlock_t s_spinlock_list_auth;
+/*以auth->time.latest按从小到大的顺序排序*/
+static LIST_HEAD(s_list_auth_keepalive);
+static spinlock_t s_spinlock_list_auth_keepalive;
+
 #define DEFAULT_AUTH_MAX_COUNT  (1024)
 static uint32 s_count = 0;
 static uint32 s_maxcount = DEFAULT_AUTH_MAX_COUNT;
 struct task_struct *sp_kthd_auth = NULL;
+
+#define AUTH_HASH_SLOT_MAXCOUNT (64)
 
 static uint32 authenticated_hash(const void *key)
 {
@@ -45,7 +50,7 @@ static uint32 authenticated_hash(const void *key)
         hash2 |= mac[2*i + 1];
         hash += hash2;
     }
-    return hash % 128;
+    return hash % AUTH_HASH_SLOT_MAXCOUNT;
 }
 
 static int32 authenticated_keycmp(const void *key1,
@@ -92,52 +97,54 @@ static int32 authenticated_datadup(void **dst, const void *src)
     auth->ads_embed.latest_flow = 0;
     auth->ads_embed.latest_time = now;
     
-    spinlock_init(&auth->lock);
-    spinlock_lock(&s_spinlock_list_auth);
-    list_add_tail(&auth->list,&s_list_auth);
+    spinlock_init(&auth->lock); 
+    list_add_tail(&auth->list, &s_list_auth);
+    
+    spinlock_lock(&s_spinlock_list_auth_keepalive);
+    list_add_tail(&auth->list_keepalive, &s_list_auth_keepalive);
+    spinlock_unlock(&s_spinlock_list_auth_keepalive);
+    
     ++s_count;
-    spinlock_unlock(&s_spinlock_list_auth);
     return 0;
 }
 
 static void authenticated_datafree(void *data)
 {
     authenticated_t *auth = (authenticated_t *)data;
-    spinlock_lock(&s_spinlock_list_auth);
-    list_del(&auth->list);
+    
+    spinlock_lock(&s_spinlock_list_auth_keepalive);
+    list_del(&auth->list_keepalive);
+    spinlock_unlock(&s_spinlock_list_auth_keepalive);
+    
+    list_del(&auth->list); 
     --s_count;
-    spinlock_unlock(&s_spinlock_list_auth);
     spinlock_destroy(&auth->lock);
     bzero(auth, sizeof(*auth));
     memcache_free(sp_cache_data, auth);
 }
 
-#define AUTHENTICATED_BURNED_TIME_MAX       (10*60)//(24*60*60)
-#define AUTHENTICATED_KEEPALIVE_TIME_MAX    (60)//(10*60)
-#define AUTHENTICATED_KTHREAD_SLEEP_MSECS   (1000)
+#define AUTHENTICATED_BURNED_TIME_MAX       /*(10*60)*/(5*24*60*60)
+#define AUTHENTICATED_KEEPALIVE_TIME_MAX    /*(60)*/(30*60)
+#define AUTHENTICATED_KTHREAD_SLEEP_MSECS   (10*1000)
 
 static int32 authenticated_burned_check_func(void *data)
 {
     authenticated_t *auth = NULL;
+    BOOL should_sleep = TRUE;
+    uint64 now;
     while (!kthread_should_stop())
     {
-        /*keepalive timeout OR burned timeout check*/
+        should_sleep = TRUE;
+        now = curtime();
+        /*burned timeout check*/
         rwlock_rdlock(&s_rwlock_htab_auth);
-        spinlock_lock(&s_spinlock_list_auth);
         if (likely(!list_empty(&s_list_auth)))
         {
-            uint64 now = curtime();
             list_for_each_entry(auth, &s_list_auth, list)
             {
-                if ((now - auth->time.latest) >= AUTHENTICATED_KEEPALIVE_TIME_MAX
-                    || (now - auth->time.start) >= AUTHENTICATED_BURNED_TIME_MAX)
+                if ((now - auth->time.start) >= AUTHENTICATED_BURNED_TIME_MAX)
                 {
-                    /*DB_INF("now[%llu], latest[%llu], start[%llu], "
-                        "keepalive-timeout[%u], burned-timeout[%u].",
-                        now, auth->time.latest, auth->time.start, 
-                        AUTHENTICATED_KEEPALIVE_TIME_MAX, 
-                        AUTHENTICATED_BURNED_TIME_MAX);*/
-                    authenticated_get(auth);
+                    should_sleep = FALSE;
                     break;
                 }
             }
@@ -145,17 +152,31 @@ static int32 authenticated_burned_check_func(void *data)
         }
         else
             auth = NULL;
-        spinlock_unlock(&s_spinlock_list_auth);
         rwlock_rdunlock(&s_rwlock_htab_auth);
-        
         if (NULL != auth)
-        {
-            config_authenticated_timeout(auth->mac); /*notify AAA-Client delete timeout user.*/
-            authenticated_put(auth);
             authenticated_del(auth);
-            continue;
+        
+        /*keepalive timeout check*/
+        spinlock_lock(&s_spinlock_list_auth_keepalive);
+        if (likely(!list_empty(&s_list_auth_keepalive)))
+        {
+            list_for_each_entry(auth, &s_list_auth_keepalive, list_keepalive)
+            {
+                if ((now - auth->time.latest) >= AUTHENTICATED_KEEPALIVE_TIME_MAX)
+                {
+                    should_sleep = FALSE;
+                    break;
+                }
+            }
+            auth = (NULL == auth || &s_list_auth_keepalive == &auth->list_keepalive) ? NULL : auth;
         }
         else
+            auth = NULL;
+        spinlock_unlock(&s_spinlock_list_auth_keepalive);
+        if (NULL != auth)
+            authenticated_del(auth);
+
+        if (TRUE == should_sleep)
             msleep_interruptible(AUTHENTICATED_KTHREAD_SLEEP_MSECS);
     }
     return 0;
@@ -175,7 +196,7 @@ int32 authenticated_init(const uint32 maxcount)
         return -1;
     s_maxcount = maxcount;
     s_count = 0;
-    sp_htab_auth = hashtab_create(&ops);
+    sp_htab_auth = hashtab_create(&ops, AUTH_HASH_SLOT_MAXCOUNT, maxcount);
     if (unlikely(NULL == sp_htab_auth))
     {
         DB_ERR("hashtab_create() call fail.");
@@ -183,7 +204,7 @@ int32 authenticated_init(const uint32 maxcount)
     }
     rwlock_init(&s_rwlock_htab_auth);
     
-    sp_cache_key = memcache_create(HWADDR_SIZE, 4);
+    sp_cache_key = memcache_create(HWADDR_SIZE, maxcount);
     if (unlikely(NULL == sp_cache_key))
     {
         DB_ERR("memcache_create() call fail for cache-key.");
@@ -193,7 +214,7 @@ int32 authenticated_init(const uint32 maxcount)
         return -1;
     }
     
-    sp_cache_data = memcache_create(sizeof(authenticated_t), 4);
+    sp_cache_data = memcache_create(sizeof(authenticated_t), maxcount);
     if (unlikely(NULL == sp_cache_data))
     {
         DB_ERR("memcache_create() call fail for cache-data.");
@@ -205,7 +226,8 @@ int32 authenticated_init(const uint32 maxcount)
         return -1;
     }
 
-    spinlock_init(&s_spinlock_list_auth);
+    spinlock_init(&s_spinlock_list_auth_keepalive);
+    
     sp_kthd_auth = kthread_run(authenticated_burned_check_func, NULL, "auth-burned-kthread");
     if (unlikely(NULL == sp_kthd_auth))
     {
@@ -217,7 +239,7 @@ int32 authenticated_init(const uint32 maxcount)
         sp_cache_key = NULL;
         memcache_destroy(sp_cache_data);
         sp_cache_data = NULL;
-        spinlock_destroy(&s_spinlock_list_auth);
+        spinlock_destroy(&s_spinlock_list_auth_keepalive);
         return -1;
     }
     return 0;
@@ -225,12 +247,15 @@ int32 authenticated_init(const uint32 maxcount)
 
 void authenticated_destroy(void)
 {
-    rwlock_wrlock(&s_rwlock_htab_auth);
+    kthread_stop(sp_kthd_auth);
+    
+    rwlock_wrlock_bh(&s_rwlock_htab_auth);
     hashtab_destroy(sp_htab_auth);
     sp_htab_auth = NULL;
     s_maxcount = DEFAULT_AUTH_MAX_COUNT;
     s_count = 0;
-    rwlock_wrunlock(&s_rwlock_htab_auth);
+    INIT_LIST_HEAD(&s_list_auth);
+    rwlock_wrunlock_bh(&s_rwlock_htab_auth);
     rwlock_destroy(&s_rwlock_htab_auth);
 
     memcache_destroy(sp_cache_key);
@@ -238,13 +263,11 @@ void authenticated_destroy(void)
 
     memcache_destroy(sp_cache_data);
     sp_cache_data = NULL;
-    
-    spinlock_lock(&s_spinlock_list_auth);
-    INIT_LIST_HEAD(&s_list_auth);
-    spinlock_unlock(&s_spinlock_list_auth);
-    spinlock_destroy(&s_spinlock_list_auth);
-    
-    kthread_stop(sp_kthd_auth);
+  
+    spinlock_lock_bh(&s_spinlock_list_auth_keepalive);
+    INIT_LIST_HEAD(&s_list_auth_keepalive);
+    spinlock_unlock_bh(&s_spinlock_list_auth_keepalive);
+    spinlock_destroy(&s_spinlock_list_auth_keepalive);
 }
 
 int32 authenticated_add(authenticated_t *auth)
@@ -255,7 +278,7 @@ int32 authenticated_add(authenticated_t *auth)
         LOGGING_ERR("Attempt to add invalid authentication user information to the users table.");
         return -1;
     }
-    rwlock_wrlock(&s_rwlock_htab_auth);
+    rwlock_wrlock_bh(&s_rwlock_htab_auth);
     if (unlikely(s_count >= s_maxcount))
     {
         authenticated_t *auth2;
@@ -265,7 +288,7 @@ int32 authenticated_add(authenticated_t *auth)
     ret = hashtab_insert(sp_htab_auth, auth->mac, auth);
     if (unlikely(0 != ret))
     {
-        rwlock_wrunlock(&s_rwlock_htab_auth);
+        rwlock_wrunlock_bh(&s_rwlock_htab_auth);
         DB_ERR("hashtab_insert() call fail.");
         LOGGING_ERR("Add authentication user to the user's table fail. "
                 "mac["MACSTR"], acct_status:%d, acct_policy:%d, "
@@ -274,13 +297,25 @@ int32 authenticated_add(authenticated_t *auth)
                 auth->acct.valid_time, auth->acct.valid_flow);
         return -1;
     }
-    rwlock_wrunlock(&s_rwlock_htab_auth);
+    rwlock_wrunlock_bh(&s_rwlock_htab_auth);
     LOGGING_INFO("Add authentication user to the user's table successfully. "
             "mac["MACSTR"], acct_status:%d, acct_policy:%d, "
             "total_seconds:%llu, total_flows:%llu",
             MAC2STR(auth->mac), auth->acct.status, auth->acct.policy, 
             auth->acct.valid_time, auth->acct.valid_flow);
     return 0;
+}
+
+/*本接口是提供给AAA-Client调用删除auth用的*/
+void authenticated_del_bh(const void *mac)
+{
+    authenticated_t *auth;
+    rwlock_wrlock_bh(&s_rwlock_htab_auth);
+    auth = (authenticated_t *)hashtab_search(sp_htab_auth, mac);
+    if (NULL != auth && atomic_dec_and_test(&auth->refcnt))
+        hashtab_delete(sp_htab_auth, auth->mac);
+    rwlock_wrunlock_bh(&s_rwlock_htab_auth);
+    LOGGING_INFO("Successful remove the user from the authenticated user list. mac["MACSTR"].", MAC2STR(mac));
 }
 
 void authenticated_del(authenticated_t *auth)
@@ -291,7 +326,8 @@ void authenticated_del(authenticated_t *auth)
         smp_rmb();
     else if (likely(!atomic_dec_and_test(&auth->refcnt)))
         return;
-    LOGGING_INFO("Successful remove the user from the authenticated user list. mac["MACSTR"].",MAC2STR(auth->mac));
+    LOGGING_INFO("Successful remove the user from the authenticated user list. mac["MACSTR"].", MAC2STR(auth->mac));
+    config_authenticated_timeout(auth->mac); /*通知应用层删除指定认证通过的用户*/
     rwlock_wrlock(&s_rwlock_htab_auth);
     hashtab_delete(sp_htab_auth, auth->mac);
     rwlock_wrunlock(&s_rwlock_htab_auth);
@@ -364,11 +400,14 @@ int32 authenticated_uplink_skb_update(authenticated_t *auth,
         {
             need_stopping = TRUE;
         }
+        spinlock_unlock(&auth->lock);
         break;
     case ACCT_STATUS_NONE:
+        spinlock_unlock(&auth->lock);
         break;
     default:
         ++auth->stats.uplink_dropped;
+        spinlock_unlock(&auth->lock);
         goto out;
     }
 
@@ -377,41 +416,60 @@ int32 authenticated_uplink_skb_update(authenticated_t *auth,
         ads_policy = advertising_policy_get(ADS_TYPE_PUSH);
         if (NULL != ads_policy)
         {
+            uint64 latest_time;
+            uint64 latest_flow;
+            uint32 adsid;
+            spinlock_lock(&auth->lock);
+            latest_time = auth->ads_push.latest_time;
+            latest_flow = auth->ads_push.latest_flow;
+            adsid = auth->ads_push.adsid;
+            spinlock_unlock(&auth->lock);
+            
             if (((ADS_POLICY_TIME_INTERVAL & ads_policy->policy) 
-                    && ((now - auth->ads_push.latest_time) >= ads_policy->time_interval))
+                    && ((now - latest_time) >= ads_policy->time_interval))
                 || ((ADS_POLICY_FLOW_INTERVAL & ads_policy->policy) 
-                    && ((flow_total - auth->ads_push.latest_flow) >= ads_policy->flow_interval)))
+                    && ((flow_total - latest_flow) >= ads_policy->flow_interval)))
             {
                 struct tcphdr *tcph = (struct tcphdr *)((int8 *)iph + (iph->ihl*4));
                 int8 *body = (int8 *)tcph + tcph->doff * 4;
-                if (tcph->psh && tcph->ack && is_http_get_request(body))
+                uint32 tcp_dlen = ntohs(iph->tot_len) - (iph->ihl * 4) - (tcph->doff * 4);
+                if (tcph->psh && tcph->ack && (tcp_dlen > 0) && is_http_get_request(body))
                 {
-                    ret = advertising_redirect(skb, &auth->ads_push.adsid, ADS_TYPE_PUSH);
+                    /*因为advertising_redirect中存在对skb的分配,可能存在阻塞。
+                     *所以本函数执行不能再spinlock中执行。*/
+                    ret = advertising_redirect(skb, &adsid, ADS_TYPE_PUSH);
                     if (likely(0 == ret))
                     {
+                        spinlock_lock(&auth->lock);
+                        auth->ads_push.adsid = adsid;
                         auth->ads_push.latest_time = now;
-                        auth->ads_push.latest_flow = auth->stats.uplink_bytes + auth->stats.downlink_bytes;
+                        auth->ads_push.latest_flow = flow_total;
                         ret = -1; /*drop this packet*/
+                        spinlock_unlock(&auth->lock);
                         goto out;
                     }
                     else
+                    {
+                        spinlock_lock(&auth->lock);
+                        auth->ads_push.latest_time = now;
+                        auth->ads_push.latest_flow = flow_total;
+                        spinlock_unlock(&auth->lock);
                         DB_WAR("advertising_redirect() fail.");
+                    }
                 }
             }
         }
     }
+    
     ret = 0;
 out:
-    spinlock_unlock(&auth->lock);
     /*keepalive*/
-    spinlock_lock(&s_spinlock_list_auth);
-    list_move_tail(&auth->list, &s_list_auth);
-    spinlock_unlock(&s_spinlock_list_auth);
+    spinlock_lock(&s_spinlock_list_auth_keepalive);
+    list_move_tail(&auth->list_keepalive, &s_list_auth_keepalive);
+    spinlock_unlock(&s_spinlock_list_auth_keepalive);
     if (unlikely(TRUE == need_stopping))
-    {/*
-        DB_INF("policy[%d], now[%llu], starttime[%llu], validtime[%llu], totalflow[%llu], validflow[%llu].",
-            auth->acct.policy, now, auth->time.start, auth->acct.valid_time, flow_total, auth->acct.valid_flow);*/
-        config_authenticated_timeout(auth->mac); /*notify AAA-Client delete timeout user.*/
+    {
+        DB_INF("authenticated user need stopping now. hwaddr["MACSTR"].", MAC2STR(auth->mac));
         authenticated_del(auth);
     }
     return ret;
@@ -441,26 +499,26 @@ int32 authenticated_downlink_skb_update(authenticated_t *auth,
         {
             need_stopping = TRUE;
         }
+        spinlock_unlock(&auth->lock);
         break;
     case ACCT_STATUS_NONE:
+        spinlock_unlock(&auth->lock);
         break;
     default:
         ++auth->stats.downlink_dropped;
+        spinlock_unlock(&auth->lock);
         goto out;
     }
     /*TODO: embed advertising*/
     ret = 0;
 out:
-    spinlock_unlock(&auth->lock);
     /*keepalive*/
-    spinlock_lock(&s_spinlock_list_auth);
-    list_move_tail(&auth->list, &s_list_auth);
-    spinlock_unlock(&s_spinlock_list_auth);
+    spinlock_lock(&s_spinlock_list_auth_keepalive);
+    list_move_tail(&auth->list_keepalive, &s_list_auth_keepalive);
+    spinlock_unlock(&s_spinlock_list_auth_keepalive);
     if (unlikely(TRUE == need_stopping))
-    {/*
-        DB_INF("policy[%d], now[%llu], starttime[%llu], validtime[%llu], totalflow[%llu], validflow[%llu].",
-            auth->acct.policy, now, auth->time.start, auth->acct.valid_time, flow_total, auth->acct.valid_flow);*/
-        config_authenticated_timeout(auth->mac); /*notify AAA-Client delete timeout user.*/
+    {
+        DB_INF("authenticated user need stopping now. hwaddr["MACSTR"].", MAC2STR(auth->mac));
         authenticated_del(auth);
     }
     return ret;
@@ -510,6 +568,7 @@ static ssize_t authenticated_proc_read(struct file *file,
         if (unlikely(head->next == &s_list_auth))
             break;
         auth = list_first_entry(head, authenticated_t, list);
+        spinlock_lock_bh(&auth->lock);
         len = sprintf(tmp, MACSTR"  "IPSTR"  %llu  %llu"
             "  %s  %d  %llu  %llu"
             "  %llu  %llu"
@@ -524,6 +583,7 @@ static ssize_t authenticated_proc_read(struct file *file,
             auth->stats.uplink_dropped, auth->stats.downlink_dropped,
             auth->ads_push.latest_time, auth->ads_push.latest_flow,
             auth->ads_embed.latest_time, auth->ads_embed.latest_flow);
+        spinlock_unlock_bh(&auth->lock);
         if (unlikely((len + copyed) > size))
             break;
         copy_to_user(buf+copyed, tmp, len);
@@ -538,15 +598,23 @@ static ssize_t authenticated_proc_read(struct file *file,
 static int32 authenticated_proc_open(struct inode *inode, 
                                      struct file *file)
 {
-    file->private_data = (void *)&s_list_auth;
-    spinlock_lock(&s_spinlock_list_auth);
+    authenticated_t *auth;
+    /*在此处先将所有的auth用户的引用+1,避免在read过程中出现auth被删除,从而造成指针访问出错*/
+    rwlock_rdlock_bh(&s_rwlock_htab_auth);
+    list_for_each_entry(auth, &s_list_auth, list)
+        authenticated_get(auth);
+    rwlock_rdunlock_bh(&s_rwlock_htab_auth);
+    file->private_data = &s_list_auth;
     return 0;
 }
 
 static int32 authenticated_proc_close(struct inode *inode, 
                                       struct file *file)
 {
-    spinlock_unlock(&s_spinlock_list_auth);
+    authenticated_t *auth, *auth_next;
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(auth, auth_next, &s_list_auth, list)
+        authenticated_del_bh(auth->mac);
     file->private_data = NULL;
     return 0;
 }

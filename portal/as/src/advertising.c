@@ -24,13 +24,14 @@ typedef struct advertising_list_st{
     rwlock_t rwlock_ads_embed;
     uint32 count_embed;
     uint32 maxcount_embed;
-    
+
+    /*cache需使用mutex保护,因为cache被push和embed共同使用,且memcache中使用了kmalloc。
+     *(kmalloc中可能会出现阻塞,使用spinlock有造成系统崩溃的风险)*/
     memcache_t *cache;
     spinlock_t spinlock_cache;
     BOOL inited;
 }advertising_list_t;
 
-//static advertising_list_t *sp_advertising_list = NULL;
 static advertising_list_t s_ads_list = {
     .inited = FALSE,
     .cache = NULL
@@ -64,7 +65,7 @@ int32 advertising_init(const uint32 max_push,
     s_ads_list.count_embed = 0;
     s_ads_list.maxcount_embed = max_embed;
 
-    s_ads_list.cache = memcache_create(sizeof(advertising_t), 4);
+    s_ads_list.cache = memcache_create(sizeof(advertising_t), max_embed+max_push);
     spinlock_init(&s_ads_list.spinlock_cache);
     s_ads_list.inited = TRUE;
     return 0;
@@ -78,31 +79,31 @@ void advertising_destroy(void)
         return;
     s_ads_list.inited = FALSE;
     
-    rwlock_wrlock(&s_ads_list.rwlock_ads_push);
+    rwlock_wrlock_bh(&s_ads_list.rwlock_ads_push);
     while (!list_empty(&s_ads_list.list_ads_push))
     {
         ads = list_first_entry(&s_ads_list.list_ads_push, advertising_t, list);
         list_del(&ads->list);
-        spinlock_lock(&s_ads_list.spinlock_cache);
+        spinlock_lock_bh(&s_ads_list.spinlock_cache);
         memcache_free(s_ads_list.cache, ads);
-        spinlock_unlock(&s_ads_list.spinlock_cache);
+        spinlock_unlock_bh(&s_ads_list.spinlock_cache);
         --(s_ads_list.count_push);
     }
-    rwlock_wrunlock(&s_ads_list.rwlock_ads_push);
+    rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_push);
     rwlock_destroy(&s_ads_list.rwlock_ads_push);
     s_ads_list.maxcount_push = 0;
     
-    rwlock_wrlock(&s_ads_list.rwlock_ads_embed);
+    rwlock_wrlock_bh(&s_ads_list.rwlock_ads_embed);
     while (!list_empty(&s_ads_list.list_ads_embed))
     {
         ads = list_first_entry(&s_ads_list.list_ads_embed, advertising_t, list);
         list_del(&ads->list);
-        spinlock_lock(&s_ads_list.spinlock_cache);
+        spinlock_lock_bh(&s_ads_list.spinlock_cache);
         memcache_free(s_ads_list.cache, ads);
-        spinlock_unlock(&s_ads_list.spinlock_cache);
+        spinlock_unlock_bh(&s_ads_list.spinlock_cache);
         --(s_ads_list.count_embed);
     }
-    rwlock_wrunlock(&s_ads_list.rwlock_ads_embed);
+    rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_embed);
     rwlock_destroy(&s_ads_list.rwlock_ads_embed);
     s_ads_list.maxcount_embed = 0;
 
@@ -124,10 +125,10 @@ int32 advertising_add(advertising_t *ads)
     switch (ads->type)
     {
     case ADS_TYPE_PUSH:
-        rwlock_wrlock(&s_ads_list.rwlock_ads_push);
+        rwlock_wrlock_bh(&s_ads_list.rwlock_ads_push);
         if (unlikely(s_ads_list.count_push >= s_ads_list.maxcount_push))
         {
-            rwlock_wrunlock(&s_ads_list.rwlock_ads_push);
+            rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_push);
             return -1;
         }
         if (likely(!list_empty(&s_ads_list.list_ads_push)))
@@ -141,7 +142,7 @@ int32 advertising_add(advertising_t *ads)
             {
                 if (likely(ads2->id == ads->id))
                 {
-                    rwlock_wrunlock(&s_ads_list.rwlock_ads_push);
+                    rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_push);
                     return -1;
                 }
                 else
@@ -153,9 +154,9 @@ int32 advertising_add(advertising_t *ads)
         else
             head = &s_ads_list.list_ads_push;
 
-        spinlock_lock(&s_ads_list.spinlock_cache);
+        spinlock_lock_bh(&s_ads_list.spinlock_cache);
         ads2 = (advertising_t *)memcache_alloc(s_ads_list.cache);
-        spinlock_unlock(&s_ads_list.spinlock_cache);
+        spinlock_unlock_bh(&s_ads_list.spinlock_cache);
         ASSERT(NULL != ads2);
         ads2->id = ads->id;
         ads2->type = ads->type;
@@ -163,13 +164,13 @@ int32 advertising_add(advertising_t *ads)
         atomic_set(&ads2->refcnt, 1);
         list_add_tail(&ads2->list, head);
         ++s_ads_list.count_push;
-        rwlock_wrunlock(&s_ads_list.rwlock_ads_push);
+        rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_push);
         break;
     case ADS_TYPE_EMBED:
-        rwlock_wrlock(&s_ads_list.rwlock_ads_embed);
+        rwlock_wrlock_bh(&s_ads_list.rwlock_ads_embed);
         if (unlikely(s_ads_list.count_embed >= s_ads_list.maxcount_embed))
         {
-            rwlock_wrunlock(&s_ads_list.rwlock_ads_embed);
+            rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_embed);
             return -1;
         }
         if (likely(!list_empty(&s_ads_list.list_ads_embed)))
@@ -183,7 +184,7 @@ int32 advertising_add(advertising_t *ads)
             {
                 if (likely(ads2->id == ads->id))
                 {
-                    rwlock_wrunlock(&s_ads_list.rwlock_ads_embed);
+                    rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_embed);
                     return -1;
                 }
                 else
@@ -195,9 +196,9 @@ int32 advertising_add(advertising_t *ads)
         else
             head = &s_ads_list.list_ads_embed;
 
-        spinlock_lock(&s_ads_list.spinlock_cache);
+        spinlock_lock_bh(&s_ads_list.spinlock_cache);
         ads2 = (advertising_t *)memcache_alloc(s_ads_list.cache);
-        spinlock_unlock(&s_ads_list.spinlock_cache);
+        spinlock_unlock_bh(&s_ads_list.spinlock_cache);
         ASSERT(NULL != ads2);
         ads2->id = ads->id;
         ads2->type = ads->type;
@@ -205,7 +206,7 @@ int32 advertising_add(advertising_t *ads)
         atomic_set(&ads2->refcnt, 1);
         list_add_tail(&ads2->list, head);
         ++s_ads_list.count_embed;
-        rwlock_wrunlock(&s_ads_list.rwlock_ads_embed);
+        rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_embed);
         break;
     default:
         LOGGING_ERR("In an attempt to add the unknown types of advertising.");
@@ -215,6 +216,75 @@ int32 advertising_add(advertising_t *ads)
             ads->id, ADS_TYPE_PUSH == ads->type ? "push" : "embed", ads->url);
     return 0;
 }
+
+/*本接口是提供给GMP调用删除ads用的*/
+void advertising_del_bh(const uint32 id,
+                        const int32 type)
+{
+    advertising_t *ads = NULL;
+    BOOL deleted = FALSE;
+    if (unlikely(FALSE == s_ads_list.inited))
+        return ;
+    switch (type)
+    {
+    case ADS_TYPE_PUSH:
+        rwlock_wrlock_bh(&s_ads_list.rwlock_ads_push);
+        if (!list_empty(&s_ads_list.list_ads_push))
+        {
+            list_for_each_entry(ads, &s_ads_list.list_ads_push, list)
+            {
+                if (ads->id >= id)
+                    break;
+            }
+            if (NULL != ads && &ads->list != &s_ads_list.list_ads_push)
+            {
+                if (id == ads->id && atomic_dec_and_test(&ads->refcnt))
+                {
+                    LOGGING_INFO("Remove advertising successfully. id[%u],type[%s],url[%s].", 
+                            ads->id, "push", ads->url);
+                    list_del(&ads->list);
+                    --s_ads_list.count_push;
+                    spinlock_lock_bh(&s_ads_list.spinlock_cache);
+                    memcache_free(s_ads_list.cache, ads);
+                    spinlock_unlock_bh(&s_ads_list.spinlock_cache);
+                    deleted = TRUE;
+                }
+            }
+        }
+        rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_push);
+        break;
+    case ADS_TYPE_EMBED:
+        rwlock_wrlock_bh(&s_ads_list.rwlock_ads_embed);
+        if (!list_empty(&s_ads_list.list_ads_embed))
+        {
+            list_for_each_entry(ads, &s_ads_list.list_ads_embed, list)
+            {
+                if (ads->id >= id)
+                    break;
+            }
+            if (NULL != ads && &ads->list != &s_ads_list.list_ads_embed)
+            {
+                if (id == ads->id && atomic_dec_and_test(&ads->refcnt))
+                {
+                    LOGGING_INFO("Remove advertising successfully. id[%u],type[%s],url[%s].", 
+                            ads->id, "push", ads->url);
+                    list_del(&ads->list);
+                    --s_ads_list.count_embed;
+                    spinlock_lock_bh(&s_ads_list.spinlock_cache);
+                    memcache_free(s_ads_list.cache, ads);
+                    spinlock_unlock_bh(&s_ads_list.spinlock_cache);
+                    deleted = TRUE;
+                }
+            }
+        }
+        rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_embed);
+        break;
+    default:
+        break;
+    }
+}
+
+
 
 void advertising_del(advertising_t *ads)
 {
@@ -475,10 +545,16 @@ int32 advertising_redirect(struct sk_buff *skb,
     advertising_t *ads = NULL;
 
     if (FALSE == s_ads_list.inited || NULL == skb)
+    {
+        DB_ERR("FALSE == s_ads_list.inited(%d) || NULL == skb(%p).", s_ads_list.inited, skb);
         return -1;
+    }
     ads = advertising_select(*latestid, type);
     if (NULL == ads)
+    {
+        DB_WAR("Don't have push advertising.");
         return -1;
+    }
     
     ret = http_ack_reply(skb);
     if (0 != ret)
@@ -569,9 +645,14 @@ static ssize_t advertising_embed_read(struct file *file,
 static int32 advertising_proc_embed_open(struct inode *inode, 
                                          struct file *file)
 {
+    advertising_t *ads;
     if (FALSE == s_ads_list.inited)
         return -ENODEV;
-    rwlock_rdlock(&s_ads_list.rwlock_ads_embed);
+    /*在此处先将所有的ads用户的引用+1,避免在read过程中出现ads被删除,从而造成指针访问出错*/
+    rwlock_rdlock_bh(&s_ads_list.rwlock_ads_embed);
+    list_for_each_entry(ads, &s_ads_list.list_ads_embed, list)
+        advertising_get(ads);
+    rwlock_rdunlock_bh(&s_ads_list.rwlock_ads_embed);
     file->private_data = &s_ads_list.list_ads_embed;
     return 0;
 }
@@ -579,7 +660,10 @@ static int32 advertising_proc_embed_open(struct inode *inode,
 static int32 advertising_proc_embed_close(struct inode *inode, 
                                           struct file *file)
 {
-    rwlock_rdunlock(&s_ads_list.rwlock_ads_embed);
+    advertising_t *ads, *ads_next;
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(ads, ads_next, &s_ads_list.list_ads_embed, list)
+        advertising_put(ads);
     file->private_data = NULL;
     return 0;
 }
@@ -627,17 +711,26 @@ static ssize_t advertising_push_read(struct file *file,
 static int32 advertising_proc_push_open(struct inode *inode, 
                                         struct file *file)
 {
+    advertising_t *ads;
     if (FALSE == s_ads_list.inited)
         return -ENODEV;
-    rwlock_rdlock(&s_ads_list.rwlock_ads_push);
+    /*在此处先将所有的ads用户的引用+1,避免在read过程中出现ads被删除,从而造成指针访问出错*/
+    rwlock_rdlock_bh(&s_ads_list.rwlock_ads_push);
+    list_for_each_entry(ads, &s_ads_list.list_ads_push, list)
+        advertising_get(ads);
+    rwlock_rdunlock_bh(&s_ads_list.rwlock_ads_push);
     file->private_data = &s_ads_list.list_ads_push;
     return 0;
 }
 
+
 static int32 advertising_proc_push_close(struct inode *inode, 
                                          struct file *file)
 {
-    rwlock_rdunlock(&s_ads_list.rwlock_ads_push);
+    advertising_t *ads, *ads_next;
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(ads, ads_next, &s_ads_list.list_ads_push, list)
+        advertising_put(ads);
     file->private_data = NULL;
     return 0;
 }

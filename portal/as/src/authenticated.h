@@ -10,6 +10,7 @@ extern "C" {
 #include <linux/proc_fs.h>
 #include "type.h"
 #include "def.h"
+#include "spinlock.h"
 
 /*accounting status*/
 typedef enum acct_status_en{
@@ -47,6 +48,7 @@ typedef struct auth_ads_st{
 
 typedef struct authenticated_st{
     struct list_head list;
+    struct list_head list_keepalive;
     atomic_t refcnt;
     spinlock_t lock;
     uint8 mac[HWADDR_SIZE];
@@ -65,6 +67,8 @@ typedef struct authenticated_st{
 int32 authenticated_init(const uint32 maxcount);
 void authenticated_destroy(void);
 int32 authenticated_add(authenticated_t *auth);
+/*本接口是提供给AAA-Client调用删除auth用的*/
+void authenticated_del_bh(const void *mac);
 void authenticated_del(authenticated_t *auth);
 authenticated_t *authenticated_get(authenticated_t *auth);
 void authenticated_put(authenticated_t *auth);

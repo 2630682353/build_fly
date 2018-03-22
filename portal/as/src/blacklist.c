@@ -15,7 +15,8 @@ static memcache_t *sp_cache_data = NULL;
 static uint32 s_count = 0;
 static uint32 s_maxcount = 0;
 static LIST_HEAD(s_list_blacklist);
-static spinlock_t s_spinlock_list_blacklist;
+
+#define BLACLIST_HASH_SLOT_MAXCOUNT (64)
 
 static uint32 blacklist_hash(const void *key)
 {
@@ -30,7 +31,7 @@ static uint32 blacklist_hash(const void *key)
         hash2 |= mac[2*i + 1];
         hash += hash2;
     }
-    return hash % 32;
+    return hash % BLACLIST_HASH_SLOT_MAXCOUNT;
 }
 
 static int32 blacklist_keycmp(const void *key1, const void *key2)
@@ -64,20 +65,16 @@ static int32 blacklist_datadup(void **dst, const void *src)
     atomic_set(&black->refcnt, 1);
     black->stats.uplink_pkts = black->stats.downlink_pkts = 0;
     spinlock_init(&black->lock);
-    spinlock_lock(&s_spinlock_list_blacklist);
     list_add_tail(&black->list, &s_list_blacklist);
     ++s_count;
-    spinlock_unlock(&s_spinlock_list_blacklist);
     return 0;
 }
 
 static void blacklist_datafree(void *data)
 {
     blacklist_t *black = (blacklist_t *)data;
-    spinlock_lock(&s_spinlock_list_blacklist);
     list_del(&black->list);
     --s_count;
-    spinlock_unlock(&s_spinlock_list_blacklist);
     spinlock_destroy(&black->lock);
     bzero(black, sizeof(*black));
     memcache_free(sp_cache_data, data);
@@ -97,7 +94,7 @@ int32 blacklist_init(const uint32 maxcount)
     s_count = 0;
     s_maxcount = maxcount;
     
-    sp_htab_blacklist = hashtab_create(&ops);
+    sp_htab_blacklist = hashtab_create(&ops, BLACLIST_HASH_SLOT_MAXCOUNT, maxcount);
     if (unlikely(NULL == sp_htab_blacklist))
     {
         DB_ERR("hashtab_create() call fail.");
@@ -105,15 +102,16 @@ int32 blacklist_init(const uint32 maxcount)
     }
     rwlock_init(&s_rwlock_blacklist);
     
-    sp_cache_key = memcache_create(HWADDR_SIZE, 4);
+    sp_cache_key = memcache_create(HWADDR_SIZE, maxcount);
     if (unlikely(NULL == sp_cache_key))
     {
         DB_ERR("memcache_create() call fail for cache-key.");
         hashtab_destroy(sp_htab_blacklist);
         sp_htab_blacklist = NULL;
         rwlock_destroy(&s_rwlock_blacklist);
+        return -1;
     }
-    sp_cache_data = memcache_create(sizeof(blacklist_t), 4);
+    sp_cache_data = memcache_create(sizeof(blacklist_t), maxcount);
     if (unlikely(NULL == sp_cache_data))
     {
         DB_ERR("memcache_create() call fail for cache-key.");
@@ -122,28 +120,25 @@ int32 blacklist_init(const uint32 maxcount)
         rwlock_destroy(&s_rwlock_blacklist);
         memcache_destroy(sp_cache_key);
         sp_cache_key = NULL;
+        return -1;
     }
-    spinlock_init(&s_spinlock_list_blacklist);
     return 0;
 }
 
 void blacklist_destroy(void)
 {
-    rwlock_wrlock(&s_rwlock_blacklist);
+    rwlock_wrlock_bh(&s_rwlock_blacklist);
     hashtab_destroy(sp_htab_blacklist);
     s_maxcount = 0;
     s_count = 0;
     sp_htab_blacklist = NULL;
-    rwlock_wrunlock(&s_rwlock_blacklist);
+    INIT_LIST_HEAD(&s_list_blacklist);
+    rwlock_wrunlock_bh(&s_rwlock_blacklist);
     rwlock_destroy(&s_rwlock_blacklist);
     memcache_destroy(sp_cache_key);
     sp_cache_key = NULL;
     memcache_destroy(sp_cache_data);
     sp_cache_data = NULL;
-    spinlock_lock(&s_spinlock_list_blacklist);
-    INIT_LIST_HEAD(&s_list_blacklist);
-    spinlock_unlock(&s_spinlock_list_blacklist);
-    spinlock_destroy(&s_spinlock_list_blacklist);
 }
 
 int32 blacklist_add(blacklist_t *black)
@@ -155,10 +150,10 @@ int32 blacklist_add(blacklist_t *black)
         return -1;
     }
     
-    rwlock_wrlock(&s_rwlock_blacklist);
+    rwlock_wrlock_bh(&s_rwlock_blacklist);
     if (unlikely(s_count >= s_maxcount))
     {
-        rwlock_wrunlock(&s_rwlock_blacklist);
+        rwlock_wrunlock_bh(&s_rwlock_blacklist);
         LOGGING_ERR("Add user to the blacklist table fail for blacklist full. count[%u], maxcount[%u]. "
                 "mac["MACSTR"].", s_count, s_maxcount, MAC2STR(black->mac));
         return -1;
@@ -166,15 +161,26 @@ int32 blacklist_add(blacklist_t *black)
     ret = hashtab_insert(sp_htab_blacklist, black->mac, black);
     if (unlikely(0 != ret))
     {
-        rwlock_wrunlock(&s_rwlock_blacklist);
+        rwlock_wrunlock_bh(&s_rwlock_blacklist);
         LOGGING_ERR("Add user to the blacklist table fail. "
                 "mac["MACSTR"].", MAC2STR(black->mac));
         return -1;
     }
-    rwlock_wrunlock(&s_rwlock_blacklist);
+    rwlock_wrunlock_bh(&s_rwlock_blacklist);
     LOGGING_INFO("Add user to the blacklist table successfully. "
             "mac["MACSTR"].", MAC2STR(black->mac));
     return 0;
+}
+
+void blacklist_del_bh(const void *mac)
+{
+    blacklist_t *black;
+    rwlock_wrlock_bh(&s_rwlock_blacklist);
+    black = (blacklist_t *)hashtab_search(sp_htab_blacklist, mac);
+    if (NULL != black && atomic_dec_and_test(&black->refcnt))
+        hashtab_delete(sp_htab_blacklist, black->mac);
+    rwlock_wrunlock_bh(&s_rwlock_blacklist);
+    LOGGING_INFO("Successful remove the user from the blacklist. mac["MACSTR"].", MAC2STR(mac));
 }
 
 void blacklist_del(blacklist_t *black)
@@ -262,10 +268,12 @@ static ssize_t blacklist_read(struct file *file,
         if (unlikely(head->next == &s_list_blacklist))
             break;
         black = list_first_entry(head, blacklist_t, list);
+        spinlock_lock_bh(&black->lock);
         len = sprintf(tmp, MACSTR"  %llu  %llu\n", 
                 MAC2STR(black->mac), 
                 black->stats.uplink_pkts, 
                 black->stats.downlink_pkts);
+        spinlock_unlock_bh(&black->lock);
         if (unlikely((len + copyed) > size))
             break;
         copy_to_user(buf+copyed, tmp, len);
@@ -280,15 +288,23 @@ static ssize_t blacklist_read(struct file *file,
 static int32 blacklist_proc_open(struct inode *inode, 
                                  struct file *file)
 {
-    file->private_data = (void *)&s_list_blacklist;
-    spinlock_lock(&s_spinlock_list_blacklist);
+    blacklist_t *black;
+    /*在此处先将所有的black用户的引用+1,避免在read过程中出现black被删除,从而造成指针访问出错*/
+    rwlock_rdlock_bh(&s_rwlock_blacklist);
+    list_for_each_entry(black, &s_list_blacklist, list)
+        blacklist_get(black);
+    rwlock_rdunlock_bh(&s_rwlock_blacklist);
+    file->private_data = &s_list_blacklist;
     return 0;
 }
 
 static int32 blacklist_proc_close(struct inode *inode, 
                                   struct file *file)
 {
-    spinlock_unlock(&s_spinlock_list_blacklist);
+    blacklist_t *black, *black_next;
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(black, black_next, &s_list_blacklist, list)
+        blacklist_del_bh(black->mac);
     file->private_data = NULL;
     return 0;
 }

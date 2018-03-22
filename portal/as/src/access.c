@@ -96,13 +96,15 @@ static inline BOOL is_to_local(struct sk_buff *skb)
     int32 ret;
     const struct iphdr *iph = http_iphdr(skb);
     /*loop ip addr*/
-    if (0x7f000001 == htonl(iph->daddr))
+    if (0x7f000000 == (htonl(iph->daddr) & 0xff000000))
         return TRUE;
     ret = ip_route_input_noref(skb, iph->daddr, iph->saddr, iph->tos, skb->dev);
-    if (!unlikely(ret))
+    if (likely(0 == ret))
     {
         struct rtable *rt = skb_rtable(skb);
-        if (RTN_LOCAL == rt->rt_type)
+        if (unlikely(NULL == rt))
+            return FALSE;
+        if (unlikely(RTN_LOCAL == rt->rt_type))
 		    return TRUE;
     }
     return FALSE;
@@ -116,10 +118,10 @@ static inline BOOL is_bypass(struct sk_buff *skb)
     struct iphdr *iph = NULL;
     if (TRUE != portal_skb_exist(skb))
         return TRUE;
+    iph = http_iphdr(skb);
     if (skb_from_vlan_dev(skb))
     {
         struct vlan_ethhdr *vethh = vlan_eth_hdr(skb);
-        iph = http_iphdr(skb);
         if (htons(ETH_P_IP) != vethh->h_vlan_encapsulated_proto
             || IPPROTO_ICMP == iph->protocol)
             return TRUE;
@@ -127,7 +129,6 @@ static inline BOOL is_bypass(struct sk_buff *skb)
     else
     {
         struct ethhdr *ethh = eth_hdr(skb);
-        iph = http_iphdr(skb);
         if (htons(ETH_P_IP) != ethh->h_proto
             || IPPROTO_ICMP == iph->protocol)
             return TRUE;
@@ -154,8 +155,6 @@ static int32 whitelist_uplink_skb_check(struct sk_buff *skb)
     {
         whitelist_uplink_update(white);
         ret = ND_ACCEPT;
-        DB_INF("User \""MACSTR"\" in whitelist.", MAC2STR(ethh->h_source));
-        LOGGING_INFO("User \""MACSTR"\" in whitelist from inside.", MAC2STR(ethh->h_source));
         whitelist_put(white);
     }
     return ret;
@@ -172,8 +171,6 @@ static int32 blacklist_uplink_skb_check(struct sk_buff *skb)
     {
         blacklist_uplink_update(black);
         ret = ND_DROP;
-        DB_INF("User \""MACSTR"\" in blacklist.", MAC2STR(ethh->h_source));
-        LOGGING_INFO("User \""MACSTR"\" in blacklist from inside.", MAC2STR(ethh->h_source));
         blacklist_put(black);
     }
     return ret;
@@ -201,10 +198,7 @@ static inline int32 portal_url_push(struct sk_buff *skb)
     if (NULL == url || strlen(url) <= 0)
         ret = 0;
     else
-    {
-        //DB_INF("portal-url[%s].", url);
         ret = http_check_inner_reply(skb, url);
-    }
     if (NULL != vlan)
         portal_vlan_put(vlan);
     if (NULL != interface)
@@ -314,16 +308,14 @@ static inline BOOL is_outer_bypass(struct sk_buff *skb)
 static int32 whitelist_downlink_skb_check(struct sk_buff *skb,
                                           const uint8 *hw_dest)
 {
-    int32 ret = ND_DROP;
+    int32 ret = NF_DROP;
     whitelist_t *white = NULL;
 
     white = whitelist_search(hw_dest);
     if (NULL != white)
     {
         whitelist_downlink_update(white);
-        ret = ND_ACCEPT;
-        DB_INF("User \""MACSTR"\" in whitelist.", MAC2STR(hw_dest));
-        LOGGING_INFO("User \""MACSTR"\" in whitelist from outside.", MAC2STR(hw_dest));
+        ret = NF_ACCEPT;
         whitelist_put(white);
     }
     return ret;
@@ -332,16 +324,14 @@ static int32 whitelist_downlink_skb_check(struct sk_buff *skb,
 static int32 blacklist_downlink_skb_check(struct sk_buff *skb,
                                           const uint8 *hw_dest)
 {
-    int32 ret = ND_ACCEPT;
+    int32 ret = NF_ACCEPT;
     blacklist_t *black = NULL;
 
     black = blacklist_search(hw_dest);
     if (NULL != black)
     {
         blacklist_downlink_update(black);
-        ret = ND_DROP;
-        DB_INF("User \""MACSTR"\" in blacklist.", MAC2STR(hw_dest));
-        LOGGING_INFO("User \""MACSTR"\" in blacklist from outside.", MAC2STR(hw_dest));
+        ret = NF_DROP;
         blacklist_put(black);
     }
     return ret;
@@ -350,7 +340,7 @@ static int32 blacklist_downlink_skb_check(struct sk_buff *skb,
 static int32 authenticated_downlink_skb_check(struct sk_buff *skb,
                                               const uint8 *hw_dest)
 {
-    int32 ret = ND_DROP;
+    int32 ret = NF_DROP;
     authenticated_t *auth = NULL;
 
     auth = authenticated_search(hw_dest);
@@ -364,7 +354,7 @@ static int32 authenticated_downlink_skb_check(struct sk_buff *skb,
             goto out;
         }
     }
-    ret = ND_ACCEPT;
+    ret = NF_ACCEPT;
 out:
     if (unlikely(NULL != auth))
         authenticated_put(auth);
@@ -381,20 +371,25 @@ static uint32 access_hook_post_routing_hook(uint32 hooknum,
     int32 ret;
     if (TRUE == is_outer_bypass(skb))
         return NF_ACCEPT;
+    /*由于arp_find中在返回值!=0时,会调用kfree_skb。
+     *因此需要先在此对调用skb_get,然后再在arp_find返回0后调用kfree_skb。*/
+    skb_get(skb);
     ret = arp_find(hw_dest, skb);
     if (0 != ret)
     {
         const struct iphdr *iph = ip_hdr(skb);
         DB_ERR("Not find nexthop. iph->daddr["IPSTR"].", IP2STR(iph->daddr));
-        return NF_DROP;
+        return NF_ACCEPT;
     }
-    if (ND_ACCEPT == whitelist_downlink_skb_check(skb, hw_dest))
-        return ND_ACCEPT;
-    if (ND_ACCEPT != blacklist_downlink_skb_check(skb, hw_dest))
-        return ND_DROP;
-    if (ND_ACCEPT != authenticated_downlink_skb_check(skb, hw_dest))
-        return ND_DROP;
-    return ND_ACCEPT;
+    else
+        kfree_skb(skb);
+    if (NF_ACCEPT == whitelist_downlink_skb_check(skb, hw_dest))
+        return NF_ACCEPT;
+    if (NF_ACCEPT != blacklist_downlink_skb_check(skb, hw_dest))
+        return NF_DROP;
+    if (NF_ACCEPT != authenticated_downlink_skb_check(skb, hw_dest))
+        return NF_DROP;
+    return NF_ACCEPT;
 }
 
 static struct nf_hook_ops access_nf_post_routing_hook_ops = {
@@ -407,6 +402,11 @@ static struct nf_hook_ops access_nf_post_routing_hook_ops = {
 
 static int32 __init access_module_init(void)
 {
+    if (0 != klog_init())
+    {
+        DB_ERR("Klog init fail.");
+        goto err;
+    }
     if (0 != config_init())
     {
         DB_ERR("Config init fail.");
@@ -441,18 +441,18 @@ static int32 __init access_module_init(void)
     {
         DB_ERR("NetDevice hook register fail!!");
         goto err;
-    }
+    }/*
     if (0 != nf_register_hook(&access_nf_post_routing_hook_ops))
     {
         DB_ERR("NetFilter post-routing hook register fail!!");
         goto err;
-    }
+    }*/
     proc_access_service_init();
     DB_INF("Access-Service Module init successfully.");
     LOGGING_INFO("Access-Service Module init successfully.");
     return 0;
 err:
-    nf_unregister_hook(&access_nf_post_routing_hook_ops);
+    //nf_unregister_hook(&access_nf_post_routing_hook_ops);
     nd_unregister_hook(&access_nd_hook_ops);
     portal_destroy();
     authenticated_destroy();
@@ -460,6 +460,7 @@ err:
     blacklist_destroy();
     advertising_destroy();
     config_final();
+    klog_exit();
     DB_ERR("Access-Service Module init fail!!");
     LOGGING_ERR("Access-Service Module init fail!!");
     return -1;
@@ -468,7 +469,7 @@ err:
 static void __exit access_module_exit(void)
 {
     proc_access_service_destroy();
-    nf_unregister_hook(&access_nf_post_routing_hook_ops);
+    //nf_unregister_hook(&access_nf_post_routing_hook_ops);
     nd_unregister_hook(&access_nd_hook_ops);
     portal_destroy();
     authenticated_destroy();
@@ -476,6 +477,7 @@ static void __exit access_module_exit(void)
     blacklist_destroy();
     advertising_destroy();
     config_final();
+    klog_exit();
     DB_INF("Access-Service Module remove successfully.");
     LOGGING_INFO("Access-Service Module remove successfully.");
 }

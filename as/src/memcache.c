@@ -1,7 +1,6 @@
 #include "memcache.h"
 #include "def.h"
 
-#define MEMCACHE_DEFAULT_MAX_FNSLABS    (64)
 #define MEMCACHE_FNSLABS_INCREMENT      (4)
 
 static memcache_slab_t *_memcache_slab_alloc(memcache_t *cache)
@@ -21,7 +20,7 @@ memcache_t *memcache_create(const uint32 bsize,
 {
     memcache_t *cache = NULL;
     memcache_slab_t *slab = NULL;
-    uint32 fnslabs = (nslabs > MEMCACHE_DEFAULT_MAX_FNSLABS) ? MEMCACHE_DEFAULT_MAX_FNSLABS : nslabs;
+    uint32 fnslabs = nslabs;
     if (bsize <= 0)
         return NULL;
     cache = (memcache_t *)malloc(sizeof(*cache));
@@ -75,6 +74,7 @@ void *memcache_alloc(memcache_t *cache)
     }
     slab = list_first_entry(&cache->fslabs, memcache_slab_t, list);
     list_del(&slab->list);
+    smp_rmb();
     list_add_tail(&slab->list, &cache->slabs);
     --cache->fnslabs;
     return slab->buf;
@@ -87,12 +87,8 @@ void memcache_free(memcache_t *cache,
     {
         memcache_slab_t *slab = container_of((void *)(((long)buf)-sizeof(void *)), memcache_slab_t, buf);
         list_del(&slab->list);
-        if (cache->fnslabs < MEMCACHE_DEFAULT_MAX_FNSLABS)
-        {
-            list_add_tail(&slab->list, &cache->fslabs);
-            ++cache->fnslabs;
-        }
-        else
-            _memcache_slab_free(slab);
+        smp_rmb();
+        list_add_tail(&slab->list, &cache->fslabs);
+        ++cache->fnslabs;
     }
 }

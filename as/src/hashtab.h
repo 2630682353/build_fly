@@ -42,7 +42,9 @@ typedef struct hashtab_st{
     memcache_t *cache_elems;        /*memory cache for elements*/
 }hashtab_t;
 
-hashtab_t *hashtab_create(const hashtab_operate_t *ops);
+hashtab_t *hashtab_create(const hashtab_operate_t *ops,
+                          const uint32 nslot,
+                          const uint32 nelem);
 void hashtab_destroy(hashtab_t *htab);
 int32 hashtab_insert(hashtab_t *htab,
                      const void *key,

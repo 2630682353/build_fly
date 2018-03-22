@@ -205,13 +205,13 @@ static void event_rcv_msg(struct sk_buff *skb)
     {
         nlh = nlmsg_hdr(skb);
         rcv_msg = NLMSG_DATA(nlh);
-		spin_lock(&wait_list_lock);
+		mutex_lock(&wait_list_lock);
 		tq = get_task_queue(rcv_msg->sn);
 		if (tq) {
 			tq->rcv_skb = skb_get(skb);	
 			wake_up_interruptible(&tq->waitq);
 		}	
-		spin_unlock(&wait_list_lock);
+		mutex_unlock(&wait_list_lock);
     }
 }
 
@@ -295,9 +295,9 @@ int msg_send_syn(int32 cmd, void *sbuf, int slen, void **obuf, int *olen)
 	tq->sn = msg->sn;
 	tq->rcv_skb = NULL;
 	init_waitqueue_head(&tq->waitq);
-	spin_lock(&wait_list_lock);
+	mutex_lock(&wait_list_lock);
 	list_add_tail(&tq->list, &wait_queue_list);
-	spin_unlock(&wait_list_lock);
+	mutex_unlock(&wait_list_lock);
 	
     memcpy(nlmsg_data(nlh) + sizeof(msg_t), sbuf, slen);
 	grp = MODULE_GET(cmd);
@@ -335,12 +335,12 @@ out:
 			*olen = 0;
 	}
 	if (tq) {
-		spin_lock(&wait_list_lock);
+		mutex_lock(&wait_list_lock);
 		list_del(&tq->list);
 		remove_wait_queue(&tq->waitq, &wait);
 		kfree(tq);
 		tq = NULL;
-		spin_unlock(&wait_list_lock);
+		mutex_unlock(&wait_list_lock);
 	}
 	if (nl_skb) 
 		nlmsg_free(nl_skb);

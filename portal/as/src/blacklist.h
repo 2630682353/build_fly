@@ -29,6 +29,7 @@ typedef struct blacklist_st{
 int32 blacklist_init(const uint32 maxcount);
 void blacklist_destroy(void);
 int32 blacklist_add(blacklist_t *black);
+void blacklist_del_bh(const void *mac);
 void blacklist_del(blacklist_t *black);
 blacklist_t *blacklist_get(blacklist_t *black);
 void blacklist_put(blacklist_t *black);

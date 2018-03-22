@@ -4,6 +4,7 @@
 #include "advertising.h"
 #include "authenticated.h"
 #include "blacklist.h"
+#include "whitelist.h"
 #include "def.h"
 #include "portal.h"
 
@@ -71,7 +72,6 @@ static int32 config_advertising_del(const int32 cmd,
                                     void *obuf,
                                     int32 *olen)
 {
-    advertising_t *ads;
     advertising_cfg_t *cfg;
     if (ilen < sizeof(*cfg))
     {
@@ -83,12 +83,7 @@ static int32 config_advertising_del(const int32 cmd,
     }
     cfg = (advertising_cfg_t *)ibuf;
     DB_PARAM("advertising: id[%u],type[%d],url[%s].", cfg->id, cfg->type, cfg->url);
-    ads = advertising_search(cfg->id, cfg->type);
-    if (NULL != ads)
-    {
-        advertising_put(ads);
-        advertising_del(ads);
-    }
+    advertising_del_bh(cfg->id, cfg->type);
     *olen = 0;
     return SUCCESS;
 }
@@ -174,7 +169,6 @@ static int32 config_blacklist_del(const int32 cmd,
                                   void *obuf,
                                   int32 *olen)
 {
-    blacklist_t *black;
     uint8 *mac = (uint8 *)ibuf;
     if (ilen < HWADDR_SIZE)
     {
@@ -185,15 +179,64 @@ static int32 config_blacklist_del(const int32 cmd,
         return ERR_CODE_PARAMETER;
     }
     DB_PARAM("mac["MACSTR"].", MAC2STR(mac));
-    black = blacklist_search(mac);
-    if (NULL != black)
+    blacklist_del_bh(mac);
+    *olen = 0;
+    return SUCCESS;
+}
+
+static int32 config_whitelist_add(const int32 cmd,
+                                  void *ibuf,
+                                  int32 ilen,
+                                  void *obuf,
+                                  int32 *olen)
+{
+    whitelist_t white;
+    uint8 *mac = (uint8 *)ibuf;
+    int32 ret;
+    if (ilen < HWADDR_SIZE)
     {
-        blacklist_put(black);
-        blacklist_del(black);
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    DB_PARAM("mac["MACSTR"].", MAC2STR(mac));
+    bzero(&white, sizeof(white));
+    memcpy(white.mac, mac, sizeof(white.mac));
+    ret = whitelist_add(&white);
+    if (0 != ret)
+    {
+        DB_ERR("whitelist_add() fail. hwaddr[" MACSTR "].", MAC2STR(mac));
+        config_error(obuf, olen, "Add user to whitelist fail. hwaddr[" MACSTR "], cmd[0x%x].", 
+            MAC2STR(mac), cmd);
+        return ERR_CODE_OPERATE_ADD;
     }
     *olen = 0;
     return SUCCESS;
 }
+
+static int32 config_whitelist_del(const int32 cmd,
+                                  void *ibuf,
+                                  int32 ilen,
+                                  void *obuf,
+                                  int32 *olen)
+{
+    uint8 *mac = (uint8 *)ibuf;
+    if (ilen < HWADDR_SIZE)
+    {
+        DB_ERR("Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        config_error(obuf, olen, "Invalid parameter. ibuf[%p], ilen[%d], expect-lenght[%d], cmd[0x%x].", 
+                ibuf, ilen, HWADDR_SIZE, cmd);
+        return ERR_CODE_PARAMETER;
+    }
+    DB_PARAM("mac["MACSTR"].", MAC2STR(mac));
+    whitelist_del_bh(mac);
+    *olen = 0;
+    return SUCCESS;
+}
+
 
 typedef struct authenticated_cfg_st{
     uint32 ipaddr;
@@ -258,7 +301,6 @@ static int32 config_authenticated_del(const int32 cmd,
                                       void *obuf,
                                       int32 *olen)
 {
-    authenticated_t *auth;
     uint8 *mac = (uint8 *)ibuf;
     if (ilen < HWADDR_SIZE)
     {
@@ -269,12 +311,7 @@ static int32 config_authenticated_del(const int32 cmd,
         return ERR_CODE_PARAMETER;
     }
     DB_PARAM("mac["MACSTR"].", MAC2STR(mac));
-    auth = authenticated_search(mac);
-    if (NULL != auth)
-    {
-        authenticated_put(auth);
-        authenticated_del(auth);
-    }
+    authenticated_del_bh(mac);
     *olen = 0;
     return SUCCESS;
 }
@@ -356,12 +393,12 @@ static int32 config_portal_del(const int32 cmd,
     if (0 == cfg->apply) /*apply to interface*/
     {
         DB_PARAM("apply[%d], ifname[%s].", cfg->apply, cfg->ifname, cfg->url);
-        portal_interface_delete(cfg->ifname);
+        portal_interface_delete_bh(cfg->ifname);
     }
     else if (1 == cfg->apply) /*apply to vlan*/
     {
         DB_PARAM("apply[%d], vlan_id[%u].", cfg->apply, cfg->vlan_id);
-        portal_vlan_delete(cfg->vlan_id);
+        portal_vlan_delete_bh(cfg->vlan_id);
     }
     else
     {
@@ -381,6 +418,8 @@ static struct {
         {MSG_CMD_AS_AUTHENTICATED_DELETE,       config_authenticated_del},
         {MSG_CMD_AS_BLACKLIST_ADD,              config_blacklist_add},
         {MSG_CMD_AS_BLACKLIST_DELETE,           config_blacklist_del},
+        {MSG_CMD_AS_WHITELIST_ADD,              config_whitelist_add},
+        {MSG_CMD_AS_WHITELIST_DELETE,           config_whitelist_del},
         {MSG_CMD_AS_ADVERTISING_ADD,            config_advertising_add},
         {MSG_CMD_AS_ADVERTISING_DELETE,         config_advertising_del},
         {MSG_CMD_AS_ADVERTISING_POLICY_SET,     config_advertising_policy_set},

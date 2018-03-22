@@ -20,7 +20,6 @@ void timer_handler() {
 			}
 		}
 	}
-	alarm(timer_timeslot);
 }
 
 util_timer *add_timer(int (*cb_func)(),int delay,int loop, int interval) {
@@ -45,4 +44,5 @@ int timer_list_init(int timeslot, void (*sig_handler)(int sig))
 	timer_timeslot = timeslot;
 	signal(SIGALRM, sig_handler);
 	alarm(timer_timeslot);
+	return 0;
 }

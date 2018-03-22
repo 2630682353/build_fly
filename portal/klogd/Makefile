@@ -19,6 +19,7 @@ define Package/klogd
   TITLE:=Klogd progress
   FILES:=$(PKG_BUILD_DIR)/klogd
   AUTOLOAD:=$(call AutoLoad,50,klogd)
+  DEPENDS += +libpthread
 endef
 
 define Package/klogd/description
