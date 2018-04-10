@@ -88,6 +88,14 @@ unsigned long long simple_strtoull(const char *cp, char **endp, unsigned int bas
 	return result;
 }
 
+time_t uptime()
+{
+	struct sysinfo info;
+	if (!sysinfo(&info)) {
+		return info.uptime;
+	}
+	return 0;
+}
 
 int igd_md5sum(char *file, void *md5)
 {

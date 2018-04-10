@@ -24,9 +24,13 @@ typedef struct portal_interface_st{
 
 int32 portal_interface_add(const int8 *ifname,
                            const int8 *url);
-void portal_interface_delete_bh(const int8 *ifname);
-portal_interface_t *portal_interface_get(const int8 *ifname);
+void portal_interface_del_bh(portal_interface_t *interface);
+void portal_interface_put_bh(portal_interface_t *interface);
+void portal_interface_del(portal_interface_t *interface);
 void portal_interface_put(portal_interface_t *interface);
+portal_interface_t *portal_interface_get(portal_interface_t *interface);
+portal_interface_t *portal_interface_search(const int8 *ifname);
+void portal_interface_del_by_ifname(const void *ifname);
 BOOL portal_interface_exist(const int8 *ifname);
 
 typedef struct portal_vlan_st{
@@ -38,9 +42,13 @@ typedef struct portal_vlan_st{
 }portal_vlan_t;
 int32 portal_vlan_add(const uint16 vlan_id,
                       const int8 *url);
-void portal_vlan_delete_bh(const uint16 vlan_id);
-portal_vlan_t *portal_vlan_get(const uint16 vlan_id);
+void portal_vlan_del_bh(portal_vlan_t *vlan);
+void portal_vlan_put_bh(portal_vlan_t *vlan);
+portal_vlan_t *portal_vlan_get(portal_vlan_t *vlan);
+portal_vlan_t *portal_vlan_search(const uint16 vlan_id);
+void portal_vlan_del(portal_vlan_t *vlan);
 void portal_vlan_put(portal_vlan_t *vlan);
+void portal_vlan_del_by_vlanid(const uint16 vlan_id);
 BOOL portal_vlan_exist(const uint16 vlan_id);
 
 static inline BOOL portal_skb_exist(const struct sk_buff *skb)

@@ -7,6 +7,7 @@
 #include "log.h"
 
 #include <linux/proc_fs.h>
+#include <linux/netdevice.h>
 
 static hashtab_t *sp_htab_whitelist = NULL;
 static rwlock_t s_rwlock_whitelist;
@@ -154,8 +155,8 @@ int32 whitelist_add(whitelist_t *white)
     if (unlikely(s_count >= s_maxcount))
     {
         rwlock_wrunlock_bh(&s_rwlock_whitelist);
-        LOGGING_ERR("Add user to the whitelist table fail for whitelist full. count[%u], maxcount[%u]. "
-                "mac["MACSTR"].", s_count, s_maxcount, MAC2STR(white->mac));
+        LOGGING_ERR("Add user to the whitelist table fail for whitelist full. count[%u],maxcount[%u],"
+                "hwaddr["MACSTR"].", s_count, s_maxcount, MAC2STR(white->mac));
         return -1;
     }
     ret = hashtab_insert(sp_htab_whitelist, white->mac, white);
@@ -163,24 +164,28 @@ int32 whitelist_add(whitelist_t *white)
     {
         rwlock_wrunlock_bh(&s_rwlock_whitelist);
         LOGGING_ERR("Add user to the whitelist table fail. "
-                "mac["MACSTR"].", MAC2STR(white->mac));
+                "hwaddr["MACSTR"].", MAC2STR(white->mac));
         return -1;
     }
     rwlock_wrunlock_bh(&s_rwlock_whitelist);
     LOGGING_INFO("Add user to the whitelist table successfully. "
-            "mac["MACSTR"].", MAC2STR(white->mac));
+            "hwaddr["MACSTR"].", MAC2STR(white->mac));
     return 0;
 }
 
-void whitelist_del_bh(const void *mac)
+void whitelist_del_by_mac(const void *mac)
 {
     whitelist_t *white;
+    if (unlikely(NULL == mac))
+        return ;
     rwlock_wrlock_bh(&s_rwlock_whitelist);
     white = (whitelist_t *)hashtab_search(sp_htab_whitelist, mac);
     if (NULL != white && atomic_dec_and_test(&white->refcnt))
+    {
+        LOGGING_INFO("Successful remove the user from the whitelist. hwaddr["MACSTR"].", MAC2STR(mac));
         hashtab_delete(sp_htab_whitelist, white->mac);
+    }
     rwlock_wrunlock_bh(&s_rwlock_whitelist);
-    LOGGING_INFO("Successful remove the user from the whitelist. mac["MACSTR"].", MAC2STR(mac));
 }
 
 
@@ -192,7 +197,7 @@ void whitelist_del(whitelist_t *white)
         smp_rmb();
     else if (likely(!atomic_dec_and_test(&white->refcnt)))
         return;
-    LOGGING_INFO("Successful remove the user from the whitelist. mac["MACSTR"].", MAC2STR(white->mac));
+    LOGGING_INFO("Successful remove the user from the whitelist. hwaddr["MACSTR"].", MAC2STR(white->mac));
     rwlock_wrlock(&s_rwlock_whitelist);
     hashtab_delete(sp_htab_whitelist, white->mac);
     rwlock_wrunlock(&s_rwlock_whitelist);
@@ -210,6 +215,25 @@ void whitelist_put(whitelist_t *white)
     whitelist_del(white);
 }
 
+static void whitelist_del_bh(whitelist_t *white)
+{
+    if (unlikely(NULL == white))
+        return;
+    if (likely(atomic_read(&white->refcnt) == 1))
+        smp_rmb();
+    else if (likely(!atomic_dec_and_test(&white->refcnt)))
+        return;
+    LOGGING_INFO("Successful remove the user from the whitelist. hwaddr["MACSTR"].", MAC2STR(white->mac));
+    rwlock_wrlock_bh(&s_rwlock_whitelist);
+    hashtab_delete(sp_htab_whitelist, white->mac);
+    rwlock_wrunlock_bh(&s_rwlock_whitelist);
+}
+
+static inline void whitelist_put_bh(whitelist_t *white)
+{
+    whitelist_del_bh(white);
+}
+
 whitelist_t *whitelist_search(const void *mac)
 {
     whitelist_t *white = NULL;
@@ -223,7 +247,7 @@ whitelist_t *whitelist_search(const void *mac)
     return white;
 }
 
-int32 whitelist_uplink_update(whitelist_t *white)
+static inline int32 whitelist_uplink_update(whitelist_t *white)
 {
     spinlock_lock(&white->lock);
     ++white->stats.uplink_pkts;
@@ -231,12 +255,44 @@ int32 whitelist_uplink_update(whitelist_t *white)
     return 0;
 }
 
-int32 whitelist_downlink_update(whitelist_t *white)
+int32 whitelist_uplink_skb_check(struct sk_buff *skb)
+{
+    int32 ret = ND_DROP;
+    struct ethhdr *ethh = eth_hdr(skb);
+    whitelist_t *white = NULL;
+
+    white = whitelist_search(ethh->h_source);
+    if (NULL != white)
+    {
+        whitelist_uplink_update(white);
+        ret = ND_ACCEPT;
+        whitelist_put(white);
+    }
+    return ret;
+}
+
+static inline int32 whitelist_downlink_update(whitelist_t *white)
 {
     spinlock_lock(&white->lock);
     ++white->stats.downlink_pkts;
     spinlock_unlock(&white->lock);
     return 0;
+}
+
+int32 whitelist_downlink_skb_check(struct sk_buff *skb,
+                                   const uint8 *hw_dest)
+{
+    int32 ret = NF_DROP;
+    whitelist_t *white = NULL;
+
+    white = whitelist_search(hw_dest);
+    if (NULL != white)
+    {
+        whitelist_downlink_update(white);
+        ret = NF_ACCEPT;
+        whitelist_put(white);
+    }
+    return ret;
 }
 
 static struct proc_dir_entry *sp_proc_whitelist = NULL;
@@ -256,7 +312,7 @@ static ssize_t whitelist_read(struct file *file,
     {
         len = sprintf(tmp, "max:%u, count:%u\n", s_maxcount, s_count);
         len += sprintf(tmp+len, "%s  %s  %s\n", 
-                    "mac", "uplink-pkts", "downlink-pkts");
+                    "hwaddr", "uplink-pkts", "downlink-pkts");
         if (len > *ppos)
         {
             len = ((len - *ppos) > size) ? size : len;
@@ -293,7 +349,9 @@ static int32 whitelist_proc_open(struct inode *inode,
     /*在此处先将所有的white用户的引用+1,避免在read过程中出现white被删除,从而造成指针访问出错*/
     rwlock_rdlock_bh(&s_rwlock_whitelist);
     list_for_each_entry(white, &s_list_whitelist, list)
+    {
         whitelist_get(white);
+    }
     rwlock_rdunlock_bh(&s_rwlock_whitelist);
     file->private_data = &s_list_whitelist;
     return 0;
@@ -305,7 +363,9 @@ static int32 whitelist_proc_close(struct inode *inode,
     whitelist_t *white, *white_next;
     /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
     list_for_each_entry_safe(white, white_next, &s_list_whitelist, list)
-        whitelist_del_bh(white->mac);
+    {
+        whitelist_put_bh(white);
+    }
     file->private_data = NULL;
     return 0;
 }

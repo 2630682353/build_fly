@@ -210,8 +210,11 @@ out:
 		free(back_str);
 	if (jstr)
 		free(jstr);
-	if (ret)
+	if (ret) {
 		recv = NULL;
+		if (obj)
+			cJSON_Delete(obj);
+	}
 	if (headers)
 		curl_slist_free_all(headers);
 	curl_easy_cleanup(mycurl);
@@ -321,7 +324,7 @@ int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, in
 	qu->if_exist = ret;
 	if (!ret) {
 		cJSON *data = cJSON_GetObjectItem(obj, "data");
-		if (!data && !data->child)
+		if (!data || !data->child)
 			goto out;
 		
 		cJSON *utype = cJSON_GetObjectItem(data, "userType");
@@ -1176,7 +1179,7 @@ int main (int argc, char **argv)
 			if (errno == EINTR || errno == EAGAIN)
 				continue;
 		}
-		
+
 		if (FD_ISSET(pipefd[0], &fds)) {
 			char signals[100];
 			ret = recv(pipefd[0], signals, sizelen(signals), 0);

@@ -17,11 +17,29 @@ typedef enum acct_status_en{
     ACCT_STATUS_NONE        = 0x00,
     ACCT_STATUS_ACCTOUNTING = 0x01
 }acct_status_e;
+static inline int8 *acct_status_to_str(const int8 status)
+{
+    if (ACCT_STATUS_NONE == status)
+        return "NONE";
+    else
+        return "ACCT";
+}
 /*accounting policy*/
 typedef enum acct_policy_en{
     ACCT_POLICY_BY_TIME = 0x01,
     ACCT_POLICY_BY_FLOW = 0x02
 }acct_policy_e;
+static inline int8 *acct_policy_to_str(const int8 policy)
+{
+    if ((ACCT_POLICY_BY_TIME | ACCT_POLICY_BY_FLOW) == policy)
+        return "TIME-FLOW";
+    else if (ACCT_POLICY_BY_TIME == policy)
+        return "TIME";
+    else if (ACCT_POLICY_BY_FLOW == policy)
+        return "FLOW";
+    else
+        return "UNKNOWN";
+}
 
 typedef struct auth_acct_st{
     int8 status;        /*Values from enum "acct_status_e"*/
@@ -67,16 +85,14 @@ typedef struct authenticated_st{
 int32 authenticated_init(const uint32 maxcount);
 void authenticated_destroy(void);
 int32 authenticated_add(authenticated_t *auth);
-/*本接口是提供给AAA-Client调用删除auth用的*/
-void authenticated_del_bh(const void *mac);
+void authenticated_del_by_mac(const void *mac);
 void authenticated_del(authenticated_t *auth);
 authenticated_t *authenticated_get(authenticated_t *auth);
 void authenticated_put(authenticated_t *auth);
 authenticated_t *authenticated_search(const void *mac);
-int32 authenticated_uplink_skb_update(authenticated_t *auth,
-                                      struct sk_buff *skb);
-int32 authenticated_downlink_skb_update(authenticated_t *auth,
-                                        struct sk_buff *skb);
+int32 authenticated_uplink_skb_check(struct sk_buff *skb);
+int32 authenticated_downlink_skb_check(struct sk_buff *skb,
+                                       const uint8 *hw_dest);
 int32 authenticated_proc_init(struct proc_dir_entry *parent);
 void authenticated_proc_destroy(struct proc_dir_entry *parent);
 

@@ -7,6 +7,7 @@
 #include "log.h"
 
 #include <linux/proc_fs.h>
+#include <linux/netdevice.h>
 
 static hashtab_t *sp_htab_blacklist = NULL;
 static rwlock_t s_rwlock_blacklist;
@@ -154,8 +155,8 @@ int32 blacklist_add(blacklist_t *black)
     if (unlikely(s_count >= s_maxcount))
     {
         rwlock_wrunlock_bh(&s_rwlock_blacklist);
-        LOGGING_ERR("Add user to the blacklist table fail for blacklist full. count[%u], maxcount[%u]. "
-                "mac["MACSTR"].", s_count, s_maxcount, MAC2STR(black->mac));
+        LOGGING_ERR("Add user to the blacklist table fail for blacklist full. count[%u],maxcount[%u],"
+                "hwaddr["MACSTR"].", s_count, s_maxcount, MAC2STR(black->mac));
         return -1;
     }
     ret = hashtab_insert(sp_htab_blacklist, black->mac, black);
@@ -163,24 +164,28 @@ int32 blacklist_add(blacklist_t *black)
     {
         rwlock_wrunlock_bh(&s_rwlock_blacklist);
         LOGGING_ERR("Add user to the blacklist table fail. "
-                "mac["MACSTR"].", MAC2STR(black->mac));
+                "hwaddr["MACSTR"].", MAC2STR(black->mac));
         return -1;
     }
     rwlock_wrunlock_bh(&s_rwlock_blacklist);
     LOGGING_INFO("Add user to the blacklist table successfully. "
-            "mac["MACSTR"].", MAC2STR(black->mac));
+            "hwaddr["MACSTR"].", MAC2STR(black->mac));
     return 0;
 }
 
-void blacklist_del_bh(const void *mac)
+void blacklist_del_by_mac(const void *mac)
 {
-    blacklist_t *black;
+    blacklist_t *black = NULL;
+    if (unlikely(NULL == mac))
+        return ;
     rwlock_wrlock_bh(&s_rwlock_blacklist);
     black = (blacklist_t *)hashtab_search(sp_htab_blacklist, mac);
     if (NULL != black && atomic_dec_and_test(&black->refcnt))
+    {
+        LOGGING_INFO("Successful remove the user from the blacklist. hwaddr["MACSTR"].", MAC2STR(mac));
         hashtab_delete(sp_htab_blacklist, black->mac);
+    }
     rwlock_wrunlock_bh(&s_rwlock_blacklist);
-    LOGGING_INFO("Successful remove the user from the blacklist. mac["MACSTR"].", MAC2STR(mac));
 }
 
 void blacklist_del(blacklist_t *black)
@@ -191,7 +196,7 @@ void blacklist_del(blacklist_t *black)
         smp_rmb();
     else if (likely(!atomic_dec_and_test(&black->refcnt)))
         return;
-    LOGGING_INFO("Successful remove the user from the blacklist. mac["MACSTR"].", MAC2STR(black->mac));
+    LOGGING_INFO("Successful remove the user from the blacklist. hwaddr["MACSTR"].", MAC2STR(black->mac));
     rwlock_wrlock(&s_rwlock_blacklist);
     hashtab_delete(sp_htab_blacklist, black->mac);
     rwlock_wrunlock(&s_rwlock_blacklist);
@@ -209,6 +214,25 @@ void blacklist_put(blacklist_t *black)
     blacklist_del(black);
 }
 
+static void blacklist_del_bh(blacklist_t *black)
+{
+    if (unlikely(NULL == black))
+        return;
+    if (likely(atomic_read(&black->refcnt) == 1))
+        smp_rmb();
+    else if (likely(!atomic_dec_and_test(&black->refcnt)))
+        return;
+    LOGGING_INFO("Successful remove the user from the blacklist. hwaddr["MACSTR"].", MAC2STR(black->mac));
+    rwlock_wrlock_bh(&s_rwlock_blacklist);
+    hashtab_delete(sp_htab_blacklist, black->mac);
+    rwlock_wrunlock_bh(&s_rwlock_blacklist);
+}
+
+static void blacklist_put_bh(blacklist_t *black)
+{
+    blacklist_del_bh(black);
+}
+
 blacklist_t *blacklist_search(const void *mac)
 {
     blacklist_t *black = NULL;
@@ -222,7 +246,7 @@ blacklist_t *blacklist_search(const void *mac)
     return black;
 }
 
-int32 blacklist_uplink_update(blacklist_t *black)
+static inline int32 blacklist_uplink_update(blacklist_t *black)
 {
     spinlock_lock(&black->lock);
     ++black->stats.uplink_pkts;
@@ -230,12 +254,44 @@ int32 blacklist_uplink_update(blacklist_t *black)
     return 0;
 }
 
-int32 blacklist_downlink_update(blacklist_t *black)
+int32 blacklist_uplink_skb_check(struct sk_buff *skb)
+{
+    int32 ret = ND_ACCEPT;
+    struct ethhdr *ethh = eth_hdr(skb);
+    blacklist_t *black = NULL;
+
+    black = blacklist_search(ethh->h_source);
+    if (NULL != black)
+    {
+        blacklist_uplink_update(black);
+        ret = ND_DROP;
+        blacklist_put(black);
+    }
+    return ret;
+}
+
+static inline int32 blacklist_downlink_update(blacklist_t *black)
 {
     spinlock_lock(&black->lock);
     ++black->stats.downlink_pkts;
     spinlock_unlock(&black->lock);
     return 0;
+}
+
+int32 blacklist_downlink_skb_check(struct sk_buff *skb,
+                                   const uint8 *hw_dest)
+{
+    int32 ret = NF_ACCEPT;
+    blacklist_t *black = NULL;
+
+    black = blacklist_search(hw_dest);
+    if (NULL != black)
+    {
+        blacklist_downlink_update(black);
+        ret = NF_DROP;
+        blacklist_put(black);
+    }
+    return ret;
 }
 
 static struct proc_dir_entry *sp_proc_blacklist = NULL;
@@ -255,7 +311,7 @@ static ssize_t blacklist_read(struct file *file,
     {
         len = sprintf(tmp, "max:%u, count:%u\n", s_maxcount, s_count);
         len += sprintf(tmp+len, "%s  %s  %s\n", 
-                    "mac", "uplink-pkts", "downlink-pkts");
+                    "hwaddr", "uplink-pkts", "downlink-pkts");
         if (len > *ppos)
         {
             len = ((len - *ppos) > size) ? size : len;
@@ -292,7 +348,9 @@ static int32 blacklist_proc_open(struct inode *inode,
     /*在此处先将所有的black用户的引用+1,避免在read过程中出现black被删除,从而造成指针访问出错*/
     rwlock_rdlock_bh(&s_rwlock_blacklist);
     list_for_each_entry(black, &s_list_blacklist, list)
+    {
         blacklist_get(black);
+    }
     rwlock_rdunlock_bh(&s_rwlock_blacklist);
     file->private_data = &s_list_blacklist;
     return 0;
@@ -304,7 +362,9 @@ static int32 blacklist_proc_close(struct inode *inode,
     blacklist_t *black, *black_next;
     /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
     list_for_each_entry_safe(black, black_next, &s_list_blacklist, list)
-        blacklist_del_bh(black->mac);
+    {
+        blacklist_put_bh(black);
+    }
     file->private_data = NULL;
     return 0;
 }

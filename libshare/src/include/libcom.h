@@ -16,6 +16,7 @@ typedef struct user_query_info
 
 
 extern int igd_md5sum(char *file, void *md5);
+extern time_t uptime();
 extern unsigned long long simple_strtoull(const char *cp, char **endp, unsigned int base);
 
 

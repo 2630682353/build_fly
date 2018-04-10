@@ -25,8 +25,6 @@ typedef struct advertising_list_st{
     uint32 count_embed;
     uint32 maxcount_embed;
 
-    /*cache需使用mutex保护,因为cache被push和embed共同使用,且memcache中使用了kmalloc。
-     *(kmalloc中可能会出现阻塞,使用spinlock有造成系统崩溃的风险)*/
     memcache_t *cache;
     spinlock_t spinlock_cache;
     BOOL inited;
@@ -84,9 +82,9 @@ void advertising_destroy(void)
     {
         ads = list_first_entry(&s_ads_list.list_ads_push, advertising_t, list);
         list_del(&ads->list);
-        spinlock_lock_bh(&s_ads_list.spinlock_cache);
+        spinlock_lock(&s_ads_list.spinlock_cache);
         memcache_free(s_ads_list.cache, ads);
-        spinlock_unlock_bh(&s_ads_list.spinlock_cache);
+        spinlock_unlock(&s_ads_list.spinlock_cache);
         --(s_ads_list.count_push);
     }
     rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_push);
@@ -98,9 +96,9 @@ void advertising_destroy(void)
     {
         ads = list_first_entry(&s_ads_list.list_ads_embed, advertising_t, list);
         list_del(&ads->list);
-        spinlock_lock_bh(&s_ads_list.spinlock_cache);
+        spinlock_lock(&s_ads_list.spinlock_cache);
         memcache_free(s_ads_list.cache, ads);
-        spinlock_unlock_bh(&s_ads_list.spinlock_cache);
+        spinlock_unlock(&s_ads_list.spinlock_cache);
         --(s_ads_list.count_embed);
     }
     rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_embed);
@@ -154,9 +152,9 @@ int32 advertising_add(advertising_t *ads)
         else
             head = &s_ads_list.list_ads_push;
 
-        spinlock_lock_bh(&s_ads_list.spinlock_cache);
+        spinlock_lock(&s_ads_list.spinlock_cache);
         ads2 = (advertising_t *)memcache_alloc(s_ads_list.cache);
-        spinlock_unlock_bh(&s_ads_list.spinlock_cache);
+        spinlock_unlock(&s_ads_list.spinlock_cache);
         ASSERT(NULL != ads2);
         ads2->id = ads->id;
         ads2->type = ads->type;
@@ -196,9 +194,9 @@ int32 advertising_add(advertising_t *ads)
         else
             head = &s_ads_list.list_ads_embed;
 
-        spinlock_lock_bh(&s_ads_list.spinlock_cache);
+        spinlock_lock(&s_ads_list.spinlock_cache);
         ads2 = (advertising_t *)memcache_alloc(s_ads_list.cache);
-        spinlock_unlock_bh(&s_ads_list.spinlock_cache);
+        spinlock_unlock(&s_ads_list.spinlock_cache);
         ASSERT(NULL != ads2);
         ads2->id = ads->id;
         ads2->type = ads->type;
@@ -213,16 +211,14 @@ int32 advertising_add(advertising_t *ads)
         return -1;
     }
     LOGGING_INFO("Add advertising successfully. id[%u],type[%s],url[%s].", 
-            ads->id, ADS_TYPE_PUSH == ads->type ? "push" : "embed", ads->url);
+            ads->id, ads_type_to_str(ads->type), ads->url);
     return 0;
 }
 
-/*本接口是提供给GMP调用删除ads用的*/
-void advertising_del_bh(const uint32 id,
-                        const int32 type)
+void advertising_del_by_id_type(const uint32 id,
+                                const int32 type)
 {
     advertising_t *ads = NULL;
-    BOOL deleted = FALSE;
     if (unlikely(FALSE == s_ads_list.inited))
         return ;
     switch (type)
@@ -241,13 +237,12 @@ void advertising_del_bh(const uint32 id,
                 if (id == ads->id && atomic_dec_and_test(&ads->refcnt))
                 {
                     LOGGING_INFO("Remove advertising successfully. id[%u],type[%s],url[%s].", 
-                            ads->id, "push", ads->url);
+                            ads->id, ads_type_to_str(ads->type), ads->url);
                     list_del(&ads->list);
                     --s_ads_list.count_push;
-                    spinlock_lock_bh(&s_ads_list.spinlock_cache);
+                    spinlock_lock(&s_ads_list.spinlock_cache);
                     memcache_free(s_ads_list.cache, ads);
-                    spinlock_unlock_bh(&s_ads_list.spinlock_cache);
-                    deleted = TRUE;
+                    spinlock_unlock(&s_ads_list.spinlock_cache);
                 }
             }
         }
@@ -267,23 +262,23 @@ void advertising_del_bh(const uint32 id,
                 if (id == ads->id && atomic_dec_and_test(&ads->refcnt))
                 {
                     LOGGING_INFO("Remove advertising successfully. id[%u],type[%s],url[%s].", 
-                            ads->id, "push", ads->url);
+                            ads->id, ads_type_to_str(ads->type), ads->url);
                     list_del(&ads->list);
                     --s_ads_list.count_embed;
-                    spinlock_lock_bh(&s_ads_list.spinlock_cache);
+                    spinlock_lock(&s_ads_list.spinlock_cache);
                     memcache_free(s_ads_list.cache, ads);
-                    spinlock_unlock_bh(&s_ads_list.spinlock_cache);
-                    deleted = TRUE;
+                    spinlock_unlock(&s_ads_list.spinlock_cache);
                 }
             }
         }
         rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_embed);
         break;
     default:
-        break;
+        DB_ERR("Undefined advertising type[%d].", ads->type);
+        LOGGING_ERR("In an attempt to remove the unknown types of advertising.");
+        return ;
     }
 }
-
 
 
 void advertising_del(advertising_t *ads)
@@ -298,7 +293,7 @@ void advertising_del(advertising_t *ads)
     {
     case ADS_TYPE_PUSH:
         LOGGING_INFO("Remove advertising successfully. id[%u],type[%s],url[%s].", 
-                ads->id, "push", ads->url);
+                ads->id, ads_type_to_str(ads->type), ads->url);
         rwlock_wrlock(&s_ads_list.rwlock_ads_push);
         list_del(&ads->list);
         --s_ads_list.count_push;
@@ -309,7 +304,7 @@ void advertising_del(advertising_t *ads)
         break;
     case ADS_TYPE_EMBED:
         LOGGING_INFO("Remove advertising successfully. id[%u],type[%s],url[%s].", 
-                ads->id, "embed", ads->url);
+                ads->id, ads_type_to_str(ads->type), ads->url);
         rwlock_wrlock(&s_ads_list.rwlock_ads_embed);
         list_del(&ads->list);
         --s_ads_list.count_embed;
@@ -335,6 +330,52 @@ advertising_t *advertising_get(advertising_t *ads)
 void advertising_put(advertising_t *ads)
 {
     advertising_del(ads);
+}
+
+
+static void advertising_del_bh(advertising_t *ads)
+{
+    if (unlikely(FALSE == s_ads_list.inited || NULL == ads))
+        return;
+    if (likely(atomic_read(&ads->refcnt) == 1))
+        smp_rmb();
+    else if (likely(!atomic_dec_and_test(&ads->refcnt)))
+        return;
+    switch (ads->type)
+    {
+    case ADS_TYPE_PUSH:
+        LOGGING_INFO("Remove advertising successfully. id[%u],type[%s],url[%s].", 
+                ads->id, ads_type_to_str(ads->type), ads->url);
+        rwlock_wrlock_bh(&s_ads_list.rwlock_ads_push);
+        list_del(&ads->list);
+        --s_ads_list.count_push;
+        spinlock_lock(&s_ads_list.spinlock_cache);
+        memcache_free(s_ads_list.cache, ads);
+        spinlock_unlock(&s_ads_list.spinlock_cache);
+        rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_push);
+        break;
+    case ADS_TYPE_EMBED:
+        LOGGING_INFO("Remove advertising successfully. id[%u],type[%s],url[%s].", 
+                ads->id, ads_type_to_str(ads->type), ads->url);
+        rwlock_wrlock_bh(&s_ads_list.rwlock_ads_embed);
+        list_del(&ads->list);
+        --s_ads_list.count_embed;
+        spinlock_lock(&s_ads_list.spinlock_cache);
+        memcache_free(s_ads_list.cache, ads);
+        spinlock_unlock(&s_ads_list.spinlock_cache);
+        rwlock_wrunlock_bh(&s_ads_list.rwlock_ads_embed);
+        break;
+    default:
+        DB_ERR("Undefined advertising type[%d].", ads->type);
+        LOGGING_ERR("In an attempt to remove the unknown types of advertising.");
+        break;
+    }
+}
+
+
+static inline void advertising_put_bh(advertising_t *ads)
+{
+    advertising_del_bh(ads);
 }
 
 advertising_t *advertising_search(const uint32 id,
@@ -539,9 +580,6 @@ int32 advertising_redirect(struct sk_buff *skb,
                            int32 type)
 {
     int32 ret;
-    struct sk_buff *nskb = NULL;
-    int8 http_data[512];
-    uint32 http_dlen = 0;
     advertising_t *ads = NULL;
 
     if (FALSE == s_ads_list.inited || NULL == skb)
@@ -555,43 +593,15 @@ int32 advertising_redirect(struct sk_buff *skb,
         DB_WAR("Don't have push advertising.");
         return -1;
     }
-    
-    ret = http_ack_reply(skb);
+
+    ret = http_advertising_redirect(skb, ads->url);
     if (0 != ret)
     {
-        advertising_put(ads);
-        DB_ERR("http_ack_reply() call fail.");
+        DB_ERR("http_advertising_redirect() call fail.");
         return ret;
     }
-    /*只针对非IOS设备,IOS设备需后续再作扩展*/
-    http_dlen = sprintf(http_data,
-                       "HTTP/1.1 302 Found\r\n"
-                       "Location: %s\r\n"
-                       "Content-Type: text/plain\r\n"
-                       "Connection: close\r\n"
-                       "Server: Apache-Coyote/1.1\r\n"
-                       "Content-Length: 0\r\n"
-                       "\r\n",
-                       ads->url);
-    nskb = http_skb_alloc(skb, http_dlen);
-    if (NULL == nskb)
-    {
-        advertising_put(ads);
-        DB_ERR("http_skb_alloc() call fail.");
-        return -1;
-    }
-    http_transport_header_fill(nskb, skb, http_data, http_dlen, FALSE, TRUE, TRUE, FALSE);
-    http_network_header_fill(nskb, skb, sizeof(struct tcphdr) + http_dlen);
-    http_mac_header_fill(nskb, skb);
-    ret = http_skb_xmit(nskb);
-    if (0 != ret)
-    {
-        advertising_put(ads);
-        DB_ERR("http_skb_xmit() call fail.");
-        return ret;
-    }
+
     *latestid = ads->id;
-    LOGGING_INFO("Advertising redirect successfully. id[%u], url[%s].", ads->id, ads->url);
     advertising_put(ads); /*need put ads*/
     return 0;
 }
@@ -630,7 +640,7 @@ static ssize_t advertising_embed_read(struct file *file,
         if (unlikely(head->next == &s_ads_list.list_ads_embed))
             break;
         ads = list_first_entry(head, advertising_t, list);
-        len = snprintf(tmp, sizeof(tmp), "%u  %d  %s\n", ads->id, ads->type, ads->url);;
+        len = snprintf(tmp, sizeof(tmp), "%u  %s  %s\n", ads->id, ads_type_to_str(ads->type), ads->url);;
         if (unlikely((len + copyed) > size))
             break;
         copy_to_user(buf+copyed, tmp, len);
@@ -651,7 +661,9 @@ static int32 advertising_proc_embed_open(struct inode *inode,
     /*在此处先将所有的ads用户的引用+1,避免在read过程中出现ads被删除,从而造成指针访问出错*/
     rwlock_rdlock_bh(&s_ads_list.rwlock_ads_embed);
     list_for_each_entry(ads, &s_ads_list.list_ads_embed, list)
+    {
         advertising_get(ads);
+    }
     rwlock_rdunlock_bh(&s_ads_list.rwlock_ads_embed);
     file->private_data = &s_ads_list.list_ads_embed;
     return 0;
@@ -663,7 +675,9 @@ static int32 advertising_proc_embed_close(struct inode *inode,
     advertising_t *ads, *ads_next;
     /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
     list_for_each_entry_safe(ads, ads_next, &s_ads_list.list_ads_embed, list)
-        advertising_put(ads);
+    {
+        advertising_put_bh(ads);
+    }
     file->private_data = NULL;
     return 0;
 }
@@ -696,7 +710,7 @@ static ssize_t advertising_push_read(struct file *file,
         if (unlikely(head->next == &s_ads_list.list_ads_push))
             break;
         ads = list_first_entry(head, advertising_t, list);
-        len = snprintf(tmp, sizeof(tmp), "%u  %d  %s\n", ads->id, ads->type, ads->url);;
+        len = snprintf(tmp, sizeof(tmp), "%u  %s  %s\n", ads->id, ads_type_to_str(ads->type), ads->url);;
         if (unlikely((len + copyed) > size))
             break;
         copy_to_user(buf+copyed, tmp, len);
@@ -717,7 +731,9 @@ static int32 advertising_proc_push_open(struct inode *inode,
     /*在此处先将所有的ads用户的引用+1,避免在read过程中出现ads被删除,从而造成指针访问出错*/
     rwlock_rdlock_bh(&s_ads_list.rwlock_ads_push);
     list_for_each_entry(ads, &s_ads_list.list_ads_push, list)
+    {
         advertising_get(ads);
+    }
     rwlock_rdunlock_bh(&s_ads_list.rwlock_ads_push);
     file->private_data = &s_ads_list.list_ads_push;
     return 0;
@@ -730,7 +746,9 @@ static int32 advertising_proc_push_close(struct inode *inode,
     advertising_t *ads, *ads_next;
     /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
     list_for_each_entry_safe(ads, ads_next, &s_ads_list.list_ads_push, list)
-        advertising_put(ads);
+    {
+        advertising_put_bh(ads);
+    }
     file->private_data = NULL;
     return 0;
 }
@@ -764,8 +782,10 @@ int32 advertising_policy_set(const advertising_policy_t *policy)
     s_advertising_policy[policy->type].time_interval = policy->time_interval;
     s_advertising_policy[policy->type].flow_interval = policy->flow_interval;
     LOGGING_INFO("Update advertising policy successfully. "
-            "policy[%d], option[%d], type[%d], time-interval[%llu], flow-interval[%llu].", 
-            policy->policy, policy->option, policy->type, policy->time_interval, policy->flow_interval);
+            "policy[%s],option[%s],type[%s],"
+            "time-interval[%llu],flow-interval[%llu].", 
+            ads_policy_to_str(policy->policy), ads_option_to_str(policy->option), ads_type_to_str(policy->type), 
+            policy->time_interval, policy->flow_interval);
     return 0;
 }
 
@@ -809,10 +829,10 @@ static ssize_t advertising_policy_read(struct file *file,
         copyed += len;
         for (index = 0; index < ARRAY_SIZE(s_advertising_policy); ++index)
         {
-            len = sprintf(tmp, "%d  %d  %d  %llu  %llu\n", 
-                    s_advertising_policy[index].policy, 
-                    s_advertising_policy[index].option,
-                    s_advertising_policy[index].type,
+            len = sprintf(tmp, "%s  %s  %s  %llu  %llu\n", 
+                    ads_policy_to_str(s_advertising_policy[index].policy), 
+                    ads_option_to_str(s_advertising_policy[index].option),
+                    ads_type_to_str(s_advertising_policy[index].type),
                     s_advertising_policy[index].time_interval,
                     s_advertising_policy[index].flow_interval);
             copy_to_user(buf+copyed, tmp, len);

@@ -16,7 +16,15 @@ typedef enum ads_type_en{
     ADS_TYPE_PUSH   = 0x00, /*push advertising*/
     ADS_TYPE_EMBED  = 0x01  /*embed advertising*/
 }ads_type_e;
-
+static inline int8 *ads_type_to_str(const int32 type)
+{
+    if (ADS_TYPE_PUSH == type)
+        return "PUSH";
+    else if (ADS_TYPE_EMBED == type)
+        return "EMBED";
+    else
+        return "UNKNOWN";
+}
 typedef struct advertising_st{
     struct list_head list;
     uint32 id;  /*Must greater than 0*/
@@ -33,11 +41,35 @@ typedef enum ads_policy_en{
     ADS_POLICY_FLOW_INTERVAL  = 0x02, /*flow interval*/
     ADS_POLICY_EVERYTIME      = 0x04  /*everytime. valid when ads->type is ADS_TYPE_EMBED*/
 }ads_policy_e;
+static inline int8 *ads_policy_to_str(const int32 policy)
+{
+    if (ADS_POLICY_NONE == policy)
+        return "NONE";
+    else if (ADS_POLICY_TIME_INTERVAL == policy)
+        return "TIME";
+    else if (ADS_POLICY_FLOW_INTERVAL == policy)
+        return "FLOW";
+    else if ((ADS_POLICY_FLOW_INTERVAL | ADS_POLICY_TIME_INTERVAL) == policy)
+        return "FLOW-TIME";
+    else if (ADS_POLICY_EVERYTIME == policy)
+        return "EVERYTIME";
+    else
+        return "UNKNOWN";
+}
 /*advertising option*/
 typedef enum ads_option_en{
     ADS_OPTION_RANDOM   = 0x00, /*random*/
     ADS_OPTION_LOOPING  = 0x01  /*looping*/
 }ads_option_e;
+static inline int8 *ads_option_to_str(const int32 option)
+{
+    if (ADS_OPTION_RANDOM == option)
+        return "RANDOM";
+    else if (ADS_OPTION_LOOPING == option)
+        return "LOOPING";
+    else
+        return "UNKNOWN";
+}
 
 typedef struct advertising_policy_st{
     int32 policy;
@@ -51,9 +83,8 @@ int32 advertising_init(const uint32 max_push,
                        const uint32 max_embed);
 void advertising_destroy(void);
 int32 advertising_add(advertising_t *ads);
-/*本接口是提供给GMP调用删除ads用的*/
-void advertising_del_bh(const uint32 id,
-                        const int32 type);
+void advertising_del_by_id_type(const uint32 id,
+                                const int32 type);
 void advertising_del(advertising_t *ads);
 advertising_t *advertising_get(advertising_t *ads);
 void advertising_put(advertising_t *ads);

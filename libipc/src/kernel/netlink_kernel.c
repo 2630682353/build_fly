@@ -33,7 +33,7 @@ static struct mutex event_mutex;
 static struct mutex umsg_mutex;
 static struct mutex cmd_list_mutex;
 //static struct mutex wait_list_mutex;
-static spinlock_t wait_list_lock;
+static struct mutex wait_list_lock;
 atomic_t v = ATOMIC_INIT(0);
 
 
@@ -222,8 +222,6 @@ struct netlink_kernel_cfg event_cfg = {
 		
 };  
 		
-		
-
 struct netlink_kernel_cfg umsg_cfg = { 
         .input  = umsg_rcv_msg, /* set recv callback */
 		.cb_mutex = &umsg_mutex,
@@ -365,7 +363,7 @@ int test_netlink_init(void)
     }   
 	
 	mutex_init(&cmd_list_mutex);
-	spin_lock_init(&wait_list_lock);
+	mutex_init(&wait_list_lock);
 		
     return 0;
 }
@@ -383,6 +381,7 @@ void test_netlink_exit(void)
     }  
 
 	mutex_destroy(&cmd_list_mutex);
+	mutex_destroy(&wait_list_lock);
 
     printk("test_netlink_exit!\n");
 }

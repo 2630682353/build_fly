@@ -10,6 +10,7 @@
 #include "config.h"
 #include "log.h"
 #include "vlan.h"
+#include "portal.h"
 
 #include <linux/delay.h>
 #include <linux/kthread.h>
@@ -33,7 +34,7 @@ static spinlock_t s_spinlock_list_auth_keepalive;
 #define DEFAULT_AUTH_MAX_COUNT  (1024)
 static uint32 s_count = 0;
 static uint32 s_maxcount = DEFAULT_AUTH_MAX_COUNT;
-struct task_struct *sp_kthd_auth = NULL;
+static struct task_struct *sp_kthd_auth = NULL;
 
 #define AUTH_HASH_SLOT_MAXCOUNT (64)
 
@@ -127,6 +128,8 @@ static void authenticated_datafree(void *data)
 #define AUTHENTICATED_KEEPALIVE_TIME_MAX    /*(60)*/(30*60)
 #define AUTHENTICATED_KTHREAD_SLEEP_MSECS   (10*1000)
 
+static void authenticated_del_bh(authenticated_t *auth);
+
 static int32 authenticated_burned_check_func(void *data)
 {
     authenticated_t *auth = NULL;
@@ -137,7 +140,7 @@ static int32 authenticated_burned_check_func(void *data)
         should_sleep = TRUE;
         now = curtime();
         /*burned timeout check*/
-        rwlock_rdlock(&s_rwlock_htab_auth);
+        rwlock_rdlock_bh(&s_rwlock_htab_auth);
         if (likely(!list_empty(&s_list_auth)))
         {
             list_for_each_entry(auth, &s_list_auth, list)
@@ -152,12 +155,12 @@ static int32 authenticated_burned_check_func(void *data)
         }
         else
             auth = NULL;
-        rwlock_rdunlock(&s_rwlock_htab_auth);
+        rwlock_rdunlock_bh(&s_rwlock_htab_auth);
         if (NULL != auth)
-            authenticated_del(auth);
+            authenticated_del_bh(auth);
         
         /*keepalive timeout check*/
-        spinlock_lock(&s_spinlock_list_auth_keepalive);
+        spinlock_lock_bh(&s_spinlock_list_auth_keepalive);
         if (likely(!list_empty(&s_list_auth_keepalive)))
         {
             list_for_each_entry(auth, &s_list_auth_keepalive, list_keepalive)
@@ -172,9 +175,9 @@ static int32 authenticated_burned_check_func(void *data)
         }
         else
             auth = NULL;
-        spinlock_unlock(&s_spinlock_list_auth_keepalive);
+        spinlock_unlock_bh(&s_spinlock_list_auth_keepalive);
         if (NULL != auth)
-            authenticated_del(auth);
+            authenticated_del_bh(auth);
 
         if (TRUE == should_sleep)
             msleep_interruptible(AUTHENTICATED_KTHREAD_SLEEP_MSECS);
@@ -218,28 +221,43 @@ int32 authenticated_init(const uint32 maxcount)
     if (unlikely(NULL == sp_cache_data))
     {
         DB_ERR("memcache_create() call fail for cache-data.");
+        memcache_destroy(sp_cache_key);
+        sp_cache_key = NULL;
         rwlock_destroy(&s_rwlock_htab_auth);
         hashtab_destroy(sp_htab_auth);
         sp_htab_auth = NULL;
-        memcache_destroy(sp_cache_key);
-        sp_cache_key = NULL;
         return -1;
     }
 
     spinlock_init(&s_spinlock_list_auth_keepalive);
-    
-    sp_kthd_auth = kthread_run(authenticated_burned_check_func, NULL, "auth-burned-kthread");
-    if (unlikely(NULL == sp_kthd_auth))
+
+    if (0 != http_init(maxcount))
     {
-        DB_ERR("memcache_create() call fail for cache-data.");
+        DB_ERR("http_init() call fail.");
+        spinlock_destroy(&s_spinlock_list_auth_keepalive);
+        memcache_destroy(sp_cache_data);
+        sp_cache_data = NULL;
+        memcache_destroy(sp_cache_key);
+        sp_cache_key = NULL;
         rwlock_destroy(&s_rwlock_htab_auth);
         hashtab_destroy(sp_htab_auth);
         sp_htab_auth = NULL;
-        memcache_destroy(sp_cache_key);
-        sp_cache_key = NULL;
+        return -1;
+    }
+    
+    sp_kthd_auth = kthread_run(authenticated_burned_check_func, NULL, "kthd-auth");
+    if (unlikely(NULL == sp_kthd_auth))
+    {
+        DB_ERR("kthread_run() call fail.");
+        http_destroy();
+        spinlock_destroy(&s_spinlock_list_auth_keepalive);
         memcache_destroy(sp_cache_data);
         sp_cache_data = NULL;
-        spinlock_destroy(&s_spinlock_list_auth_keepalive);
+        memcache_destroy(sp_cache_key);
+        sp_cache_key = NULL;
+        rwlock_destroy(&s_rwlock_htab_auth);
+        hashtab_destroy(sp_htab_auth);
+        sp_htab_auth = NULL;
         return -1;
     }
     return 0;
@@ -248,7 +266,7 @@ int32 authenticated_init(const uint32 maxcount)
 void authenticated_destroy(void)
 {
     kthread_stop(sp_kthd_auth);
-    
+    http_destroy();
     rwlock_wrlock_bh(&s_rwlock_htab_auth);
     hashtab_destroy(sp_htab_auth);
     sp_htab_auth = NULL;
@@ -291,31 +309,39 @@ int32 authenticated_add(authenticated_t *auth)
         rwlock_wrunlock_bh(&s_rwlock_htab_auth);
         DB_ERR("hashtab_insert() call fail.");
         LOGGING_ERR("Add authentication user to the user's table fail. "
-                "mac["MACSTR"], acct_status:%d, acct_policy:%d, "
-                "total_seconds:%llu, total_flows:%llu",
-                MAC2STR(auth->mac), auth->acct.status, auth->acct.policy, 
+                "hwaddr["MACSTR"],ipaddr["IPSTR"],"
+                "acct-status[%s],acct-policy[%s],"
+                "total-seconds[%llu],total-flows[%llu].",
+                MAC2STR(auth->mac), IP2STR(auth->ipaddr), 
+                acct_status_to_str(auth->acct.status), acct_policy_to_str(auth->acct.policy), 
                 auth->acct.valid_time, auth->acct.valid_flow);
         return -1;
     }
     rwlock_wrunlock_bh(&s_rwlock_htab_auth);
     LOGGING_INFO("Add authentication user to the user's table successfully. "
-            "mac["MACSTR"], acct_status:%d, acct_policy:%d, "
-            "total_seconds:%llu, total_flows:%llu",
-            MAC2STR(auth->mac), auth->acct.status, auth->acct.policy, 
+            "hwaddr["MACSTR"],ipaddr["IPSTR"],"
+            "acct-status[%s],acct-policy[%s],"
+            "total-seconds[%llu],total-flows[%llu].",
+            MAC2STR(auth->mac), IP2STR(auth->ipaddr), 
+            acct_status_to_str(auth->acct.status), acct_policy_to_str(auth->acct.policy), 
             auth->acct.valid_time, auth->acct.valid_flow);
     return 0;
 }
 
-/*本接口是提供给AAA-Client调用删除auth用的*/
-void authenticated_del_bh(const void *mac)
+void authenticated_del_by_mac(const void *mac)
 {
-    authenticated_t *auth;
+    authenticated_t *auth = NULL;
+    if (unlikely(NULL == mac))
+        return ;
     rwlock_wrlock_bh(&s_rwlock_htab_auth);
     auth = (authenticated_t *)hashtab_search(sp_htab_auth, mac);
     if (NULL != auth && atomic_dec_and_test(&auth->refcnt))
+    {
+        LOGGING_INFO("Successful remove the user from the authenticated user list. hwaddr["MACSTR"],ipaddr["IPSTR"].", 
+                MAC2STR(auth->mac), IP2STR(auth->ipaddr));
         hashtab_delete(sp_htab_auth, auth->mac);
+    }
     rwlock_wrunlock_bh(&s_rwlock_htab_auth);
-    LOGGING_INFO("Successful remove the user from the authenticated user list. mac["MACSTR"].", MAC2STR(mac));
 }
 
 void authenticated_del(authenticated_t *auth)
@@ -326,7 +352,8 @@ void authenticated_del(authenticated_t *auth)
         smp_rmb();
     else if (likely(!atomic_dec_and_test(&auth->refcnt)))
         return;
-    LOGGING_INFO("Successful remove the user from the authenticated user list. mac["MACSTR"].", MAC2STR(auth->mac));
+    LOGGING_INFO("Successful remove the user from the authenticated user list. hwaddr["MACSTR"],ipaddr["IPSTR"].", 
+            MAC2STR(auth->mac), IP2STR(auth->ipaddr));
     config_authenticated_timeout(auth->mac); /*通知应用层删除指定认证通过的用户*/
     rwlock_wrlock(&s_rwlock_htab_auth);
     hashtab_delete(sp_htab_auth, auth->mac);
@@ -345,6 +372,27 @@ void authenticated_put(authenticated_t *auth)
     authenticated_del(auth);
 }
 
+static void authenticated_del_bh(authenticated_t *auth)
+{
+    if (unlikely(NULL == auth))
+        return;
+    if (likely(atomic_read(&auth->refcnt) == 1))
+        smp_rmb();
+    else if (likely(!atomic_dec_and_test(&auth->refcnt)))
+        return;
+    LOGGING_INFO("Successful remove the user from the authenticated user list. hwaddr["MACSTR"],ipaddr["IPSTR"].", 
+            MAC2STR(auth->mac), IP2STR(auth->ipaddr));
+    config_authenticated_timeout_bh(auth->mac); /*通知应用层删除指定认证通过的用户*/
+    rwlock_wrlock_bh(&s_rwlock_htab_auth);
+    hashtab_delete(sp_htab_auth, auth->mac);
+    rwlock_wrunlock_bh(&s_rwlock_htab_auth);
+}
+
+static inline void authenticated_put_bh(authenticated_t *auth)
+{
+    authenticated_del_bh(auth);
+}
+
 authenticated_t *authenticated_search(const void *mac)
 {
     authenticated_t *auth = NULL;
@@ -358,14 +406,13 @@ authenticated_t *authenticated_search(const void *mac)
     return auth;
 }
 
-int32 authenticated_uplink_skb_update(authenticated_t *auth,
-                                      struct sk_buff *skb)
+static int32 authenticated_uplink_skb_update(authenticated_t *auth,
+                                             struct sk_buff *skb)
 {
     int32 ret = -1;
     struct iphdr *iph = NULL;
     uint64 now = curtime();
     uint64 flow_total;
-    advertising_policy_t *ads_policy = NULL;
     BOOL need_stopping = FALSE;
     
     if (skb_from_vlan_dev(skb))
@@ -410,10 +457,10 @@ int32 authenticated_uplink_skb_update(authenticated_t *auth,
         spinlock_unlock(&auth->lock);
         goto out;
     }
-
+#if 1
     if (TRUE == is_http(skb))
     {
-        ads_policy = advertising_policy_get(ADS_TYPE_PUSH);
+        advertising_policy_t *ads_policy = advertising_policy_get(ADS_TYPE_PUSH);
         if (NULL != ads_policy)
         {
             uint64 latest_time;
@@ -460,7 +507,7 @@ int32 authenticated_uplink_skb_update(authenticated_t *auth,
             }
         }
     }
-    
+#endif
     ret = 0;
 out:
     /*keepalive*/
@@ -475,8 +522,66 @@ out:
     return ret;
 }
 
-int32 authenticated_downlink_skb_update(authenticated_t *auth,
-                                        struct sk_buff *skb)
+static inline int32 authenticated_portal_push(struct sk_buff *skb)
+{
+    portal_interface_t *interface = NULL;
+    portal_vlan_t *vlan = NULL;
+    int8 *url = NULL;
+    int32 ret = -1;
+    if (skb_from_vlan_dev(skb))
+    {
+        struct vlan_ethhdr *vethh = vlan_eth_hdr(skb);
+        vlan = portal_vlan_search(ntohs(vethh->h_vlan_TCI));
+        if (NULL != vlan)
+            url = vlan->url;
+    }
+    else
+    {
+        interface = portal_interface_search(skb->dev->name);
+        if (NULL != interface)
+            url = interface->url;
+    }
+    if (NULL == url || strlen(url) <= 0)
+        ret = 0;
+    else
+        ret = http_portal_redirect(skb, url);
+    if (NULL != vlan)
+        portal_vlan_put(vlan);
+    if (NULL != interface)
+        portal_interface_put(interface);
+    return ret;
+}
+
+int32 authenticated_uplink_skb_check(struct sk_buff *skb)
+{
+    int32 ret = ND_DROP;
+    struct ethhdr *ethh = eth_hdr(skb);
+    authenticated_t *auth = NULL;
+    auth = authenticated_search(ethh->h_source);
+    if (unlikely(NULL == auth))
+    {
+        if (TRUE == is_http(skb))
+            authenticated_portal_push(skb);
+        goto out;
+    }
+    else
+    {
+        if (unlikely(0 != authenticated_uplink_skb_update(auth, skb)))
+        {
+            DB_WAR("authenticated_uplink_skb_update() checked, and drop it.");
+            goto out;
+        }
+    }
+    ret = ND_ACCEPT;
+out:
+    if (unlikely(NULL != auth))
+        authenticated_put(auth);
+    return ret;
+}
+
+
+static int32 authenticated_downlink_skb_update(authenticated_t *auth,
+                                               struct sk_buff *skb)
 {
     int32 ret = -1;
     struct iphdr *iph = ip_hdr(skb);
@@ -524,6 +629,31 @@ out:
     return ret;
 }
 
+int32 authenticated_downlink_skb_check(struct sk_buff *skb,
+                                       const uint8 *hw_dest)
+{
+    int32 ret = NF_DROP;
+    authenticated_t *auth = NULL;
+
+    auth = authenticated_search(hw_dest);
+    if (unlikely(NULL == auth))
+        goto out;
+    else
+    {
+        if (unlikely(0 != authenticated_downlink_skb_update(auth, skb)))
+        {
+            DB_WAR("authenticated_downlink_skb_update() checked, and drop it.");
+            goto out;
+        }
+    }
+    ret = NF_ACCEPT;
+out:
+    if (unlikely(NULL != auth))
+        authenticated_put(auth);
+    return ret;
+}
+
+
 
 static struct proc_dir_entry *sp_proc_authenticated = NULL;
 #define PROC_AUTHENTICATED  "authenticated"
@@ -543,14 +673,16 @@ static ssize_t authenticated_proc_read(struct file *file,
         len = sprintf(tmp, "USER Authenticated Information.\nmax:%u, count:%u\n", 
                     s_maxcount, s_count);
         len += sprintf(tmp+len, "%s  %s  %s  %s  "
-                    "%s  %s  %s  %s  "
+                    "%s  %s  "
+                    "%s  %s  "
                     "%s  %s  "
                     "%s  %s  "
                     "%s  %s  "
                     "%s  %s  "
                     "%s  %s\n", 
-                    "mac", "ipaddr", "stime", "ltime", 
-                    "acct", "policy", "times", "flows", 
+                    "hwaddr", "ipaddr", "stime", "ltime", 
+                    "acct", "policy", 
+                    "times", "flows", 
                     "uplink-pkts", "downlink-pkts", 
                     "uplink-bytes", "downlink-bytes", 
                     "uplink-drop", "downlink-drop",
@@ -570,19 +702,38 @@ static ssize_t authenticated_proc_read(struct file *file,
         auth = list_first_entry(head, authenticated_t, list);
         spinlock_lock_bh(&auth->lock);
         len = sprintf(tmp, MACSTR"  "IPSTR"  %llu  %llu"
-            "  %s  %d  %llu  %llu"
+            "  %s  %s"
+            "  %llu  %llu"
             "  %llu  %llu"
             "  %llu  %llu"
             "  %llu  %llu"
             "  %llu  %llu"
             "  %llu  %llu\n", 
             MAC2STR(auth->mac), IP2STR(auth->ipaddr), auth->time.start, auth->time.latest,
-            auth->acct.status ? "acct" : "none", auth->acct.policy, auth->acct.valid_time, auth->acct.valid_flow,
+            acct_status_to_str(auth->acct.status), acct_policy_to_str(auth->acct.policy), 
+            auth->acct.valid_time, auth->acct.valid_flow,
             auth->stats.uplink_pkts, auth->stats.downlink_pkts, 
             auth->stats.uplink_bytes, auth->stats.downlink_bytes, 
             auth->stats.uplink_dropped, auth->stats.downlink_dropped,
             auth->ads_push.latest_time, auth->ads_push.latest_flow,
             auth->ads_embed.latest_time, auth->ads_embed.latest_flow);
+        /*    
+        len = sprintf(tmp, MACSTR"  "IPSTR"  %llu  %llu"
+            "  %s  %s"
+            "  "TIMESTR"  %llu"
+            "  %llu  %llu"
+            "  %llu  %llu"
+            "  %llu  %llu"
+            "  %llu  %llu"
+            "  %llu  %llu\n", 
+            MAC2STR(auth->mac), IP2STR(auth->ipaddr), auth->time.start, auth->time.latest,
+            acct_status_to_str(auth->acct.status), acct_policy_to_str(auth->acct.policy), 
+            TIME2STR(auth->acct.valid_time), auth->acct.valid_flow,
+            auth->stats.uplink_pkts, auth->stats.downlink_pkts, 
+            auth->stats.uplink_bytes, auth->stats.downlink_bytes, 
+            auth->stats.uplink_dropped, auth->stats.downlink_dropped,
+            auth->ads_push.latest_time, auth->ads_push.latest_flow,
+            auth->ads_embed.latest_time, auth->ads_embed.latest_flow);*/
         spinlock_unlock_bh(&auth->lock);
         if (unlikely((len + copyed) > size))
             break;
@@ -602,7 +753,9 @@ static int32 authenticated_proc_open(struct inode *inode,
     /*在此处先将所有的auth用户的引用+1,避免在read过程中出现auth被删除,从而造成指针访问出错*/
     rwlock_rdlock_bh(&s_rwlock_htab_auth);
     list_for_each_entry(auth, &s_list_auth, list)
+    {
         authenticated_get(auth);
+    }
     rwlock_rdunlock_bh(&s_rwlock_htab_auth);
     file->private_data = &s_list_auth;
     return 0;
@@ -614,7 +767,9 @@ static int32 authenticated_proc_close(struct inode *inode,
     authenticated_t *auth, *auth_next;
     /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
     list_for_each_entry_safe(auth, auth_next, &s_list_auth, list)
-        authenticated_del_bh(auth->mac);
+    {
+        authenticated_put_bh(auth);
+    }
     file->private_data = NULL;
     return 0;
 }

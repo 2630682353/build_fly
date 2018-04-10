@@ -8,6 +8,7 @@ extern "C" {
 #include "type.h"
 
 void config_authenticated_timeout(const int8 *mac);
+void config_authenticated_timeout_bh(const int8 *mac);
 int32 config_init(void);
 void config_final(void);
 

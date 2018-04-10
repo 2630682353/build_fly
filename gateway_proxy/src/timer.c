@@ -5,7 +5,7 @@ static LIST_HEAD(my_timer_list);
 static int timer_timeslot;
 
 void timer_handler() {
-	time_t cur = time(NULL);
+	time_t cur = uptime();
 	util_timer *p = NULL;
 	util_timer *n = NULL;
 	list_for_each_entry_safe(p, n, &my_timer_list, list) {
@@ -25,7 +25,7 @@ void timer_handler() {
 util_timer *add_timer(int (*cb_func)(),int delay,int loop, int interval) {
 	util_timer *t = malloc(sizeof(util_timer));
 	t->cb_func = cb_func;
-	t->expire = time(NULL) + delay;
+	t->expire = uptime() + delay;
 	t->interval = interval;
 	t->loop = loop;
 	list_add(&t->list, &my_timer_list);
