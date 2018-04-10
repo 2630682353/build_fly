@@ -1,0 +1,18 @@
+config client_ip
+	option ipaddr '192.168.8.125'
+	option upload '256'
+	option download '400'
+
+
+config client_ip
+	option ipaddr '192.168.8.126'
+	option upload '200'
+	option download '500'
+
+config client_ip
+	option ipaddr '192.168.20.140-192.168.20.150'
+	option upload '300'
+	option download '40'
+
+
+
