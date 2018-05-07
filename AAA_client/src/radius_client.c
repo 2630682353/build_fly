@@ -3,6 +3,7 @@
 #include	"freeradius-client.h"
 #include	"pathnames.h"
 #include	"message.h"
+#include    "queue.h"
 #include    "list.h"
 #include    "libcom.h"
 #include     "log.h"
@@ -15,6 +16,9 @@ char		*default_realm = NULL;
 rc_handle	*rh = NULL;
 pthread_mutex_t auth_mutex;
 static int pipefd[2];
+static pthread_cond_t acct_cond;
+static queue_head_t *sp_acct_queue = NULL;
+static pthread_t pt_acct_snd = 0;
 
 typedef struct authenticated_cfg_st{
 	uint32 ipaddr;
@@ -368,8 +372,13 @@ int32 user_timeout(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	}
 	pthread_mutex_unlock(&auth_mutex);
 	if (matched) {
-		acct_handler(&p->user_info, PW_STATUS_STOP, p->acct_session);
-		free(p);
+		queue_item_t *item = (queue_item_t *)malloc(sizeof(queue_item_t));
+		item->arg = p;
+		pthread_mutex_lock(&sp_acct_queue->mutex);
+		queue_enqueue(sp_acct_queue, item);
+		pthread_mutex_unlock(&sp_acct_queue->mutex);
+		pthread_cond_signal(&acct_cond);
+		
 	}
 	*olen = 0;
 	return 0;
@@ -439,6 +448,28 @@ void config_update()
 		
 }
 
+void *msg_snd_acct_cb(void *arg)
+{
+	queue_item_t *item = NULL;
+	auth_ok_user_t *p = NULL;
+    while (1)
+    {
+    	pthread_mutex_lock(&sp_acct_queue->mutex);
+        while (TRUE == queue_empty(sp_acct_queue))
+        {
+            pthread_cond_wait(&acct_cond, &sp_acct_queue->mutex);
+        }
+		
+		item = queue_dequeue(sp_acct_queue);
+		pthread_mutex_unlock(&sp_acct_queue->mutex);
+		p = (queue_item_t *)(item->arg);
+		acct_handler(&p->user_info, PW_STATUS_STOP, p->acct_session);
+		free(p);
+		free(item);
+    }
+    pthread_exit(NULL);
+}
+
 int radius_sig_init()
 {
 	sigset_t sig;
@@ -478,16 +509,21 @@ int main(int argc, char **argv)
 	default_realm = rc_conf_str(rh, "default_realm");
 	get_dev_mac();
 	config_update();
+	radius_sig_init();
 	pthread_mutex_init(&auth_mutex, NULL);
-	
+
+	sp_acct_queue = malloc(sizeof(queue_head_t));
+	pthread_mutex_init(&sp_acct_queue->mutex, NULL);
+	queue_init(sp_acct_queue);
+	pthread_cond_init(&acct_cond, NULL);
+	pthread_create(&pt_acct_snd, NULL, (void *)msg_snd_acct_cb, NULL);
+
 	ret = socketpair(PF_UNIX, SOCK_STREAM, 0, pipefd);
 	
 	msg_init(MODULE_RADIUS);
 	msg_cmd_register(MSG_CMD_RADIUS_USER_AUTH, auth_handler);
 	msg_cmd_register(MSG_CMD_RADIUS_AUTH_TIMEOUT, user_timeout);
 	msg_dst_module_register_netlink(MODULE_AS);
-	
-	radius_sig_init();
 	
 //	timer_list_init(1, sig_hander);
 	struct timeval tv;

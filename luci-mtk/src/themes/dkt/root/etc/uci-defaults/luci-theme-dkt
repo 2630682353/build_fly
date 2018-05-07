@@ -1,0 +1,6 @@
+#!/bin/sh
+uci batch <<-EOF
+	set luci.themes.DKT=/luci-static/dkt
+	set luci.main.mediaurlbase=/luci-static/dkt
+        commit luci
+EOF

@@ -1,0 +1,179 @@
+<%+header%>
+
+<div class="r-box">
+    <!-- 路由器状态 -->
+    <div class="sub" id="m_1_box" style="display:block">
+   		
+        <div class="panel">
+            <h2>系统用户密码</h2>
+            <div class="bd-box">
+                <div class="text-val">
+					
+					<div class="value-value">
+						<span class="text-name">密码</span>
+						<input class="form-control textbox" placeholder="请输入密码" type="password" id="pwd1"/>
+					</div>
+				</div>
+				<div class="text-val">
+					
+					<div class="value-value">
+						<span class="text-name">确认密码</span>
+						<input class="form-control textbox" placeholder="请确认密码" type="password" id="pwd2"/>
+					</div>
+				</div>
+				<div class="text-val">
+					<div  id="apply" class="apply">
+						<input type="button" class="btn-sm btn btn-info" value="应用" onclick="sub()">
+					</div>
+				</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>系统重启</h2>
+            <div class="bd-box">
+				<div class="text-val">
+					<div style="display: inline-block;width: 216px;text-align: left;">
+						<div  id="reboot"><input type="button" class="btn-sm btn btn-info" value="立即重启" onclick="reboot()"></div>	
+					</div>		
+				</div>
+				<div class="text-val">
+					<div style="display: inline-block;width: 216px;text-align: left;">
+						<div id="reset"><input type="button" class="btn-sm btn btn-info" value="恢复出厂设置" onclick="reset()"></div>	
+					</div>		
+				</div>
+				<div class="text-val">
+					<div style="display: inline-block;width: 216px;text-align: left;">
+						<div id="open_ssh"><input type="button" class="btn-sm btn btn-info" value="开启ssh" onclick="open_ssh()"></div>	
+					</div>		
+				</div>
+            </div>
+        </div>
+        <form method="post" action="<%=luci.dispatcher.build_url("admin", "system","flashops")%>" enctype="multipart/form-data">
+        <div class="panel">
+            <h2>刷写新固件</h2>
+            <div class="bd-box">
+                <div class="text-val">
+					<span class="text-name">保留配置</span>
+					<div style="display: inline-block;width: 276px;text-align: left;vertical-align: top">
+						<input class="textbox" type="checkbox" id="keep" name="keep" style="display:none"  checked="checked"/>
+						<span id="myswitch" class="switch-on" themeColor="#36ca36"></span>
+					</div>
+				</div>
+				
+				<div class="text-val">
+					<div class="value-value" id="upload">
+						<span class="text-name">固件文件</span>
+						<input class="textbox" style="width:210px;border: 1px solid #eee;display: inline-block" type="file" id="image" name="image" accept=".bin,.zip"/>
+						<input type="submit" style="width: 60px;height: 28px;background-color: #66c6f2;color: #fff;border-radius: 5px;" value="上传">
+					</div>
+				</div>
+            </div>
+        </div>
+      	 </form>
+
+    </div>
+    <!-- 路由器状态 end-->
+
+<script>
+function sub(){
+
+	var apply_xhr = new XHR();
+	var e=document.getElementById("apply");
+
+	e.innerHTML="保存密码中。。。";
+	apply_xhr.get('<%=luci.dispatcher.build_url("admin", "system","pwd")%>', {"pwd1":document.getElementById("pwd1").value,"pwd2":document.getElementById("pwd2").value},
+		function(x){
+		e.innerHTML=x.responseText;
+		window.setTimeout(function(){e.innerHTML="<input type='button' class='btn-sm btn btn-info' value='应用' onclick='sub()'>";},1000);
+		
+		});
+}
+
+function reboot(){
+	var apply_xhr = new XHR();
+	var e=document.getElementById("reboot");
+
+	e.innerHTML="请稍等1分钟:设备重启中。。。";
+	apply_xhr.get('<%=luci.dispatcher.build_url("admin", "system","reboot")%>', {"reboot":1},
+		function(){	
+		});
+	window.setTimeout(function(){window.top.location='<%=controller%>/admin';},60000);
+	
+}
+
+function reset(){
+	if (confirm('确定要放弃所有更改')) {
+		var apply_xhr = new XHR();
+		var e=document.getElementById("reset");
+
+		e.innerHTML="恢复出厂设置中。。。";
+		apply_xhr.get('<%=luci.dispatcher.build_url("admin", "system","reset")%>', {"reset":1},
+			function(x){	
+				e.innerHTML=x.responseText;
+			});
+		window.setTimeout(function(){window.top.location='192.168.1.1';},60000);
+
+	}
+}
+
+function open_ssh(){
+	var apply_xhr = new XHR();
+	var e=document.getElementById("open_ssh");
+
+	e.innerHTML="ssh开启中。。。";
+	apply_xhr.get('/cgi-bin/portal_cgi', {"opt":"start_app","app":"dropbear"},
+		function(x){
+			var data = JSON.parse(x.responseText);
+			if (data.code) {
+				e.innerHTML="开启失败"
+				window.setTimeout(function(){e.innerHTML=
+					"<input type=\"button\" class=\"btn-sm btn btn-info\" value=\"开启ssh\" onclick=\"open_ssh()\">"},1000);
+				
+			} else {
+				e.innerHTML="开启成功"
+				window.setTimeout(function(){e.innerHTML=
+					"<input type=\"button\" class=\"btn-sm btn btn-info\" value=\"关闭ssh\" onclick=\"close_ssh()\">"},1000);
+			}
+		});
+}
+
+function close_ssh(){
+	var apply_xhr = new XHR();
+	var e=document.getElementById("open_ssh");
+
+	e.innerHTML="ssh关闭中。。。";
+	apply_xhr.get('/cgi-bin/portal_cgi', {"opt":"stop_app","app":"dropbear"},
+		function(x){
+			var data = JSON.parse(x.responseText);
+			if (data.code) {
+				e.innerHTML="关闭失败"
+				window.setTimeout(function(){e.innerHTML=
+					"<input type=\"button\" class=\"btn-sm btn btn-info\" value=\"关闭ssh\" onclick=\"close_ssh()\">"},1000);
+			} else {
+				
+				e.innerHTML="关闭成功"
+				window.setTimeout(function(){e.innerHTML=
+					"<input type=\"button\" class=\"btn-sm btn btn-info\" value=\"开启ssh\" onclick=\"open_ssh()\">"},1000);
+			}
+		});
+}
+
+	function rememberPass(){
+			switchEvent("#myswitch",function(){
+		
+				$("#keep").click()
+			
+			},function(){
+			//	$("#cbid\\.dhcp\\.lan\\.ignore").attr('checked',false);
+				$("#keep").click()
+			});
+
+		}
+		jQuery(document).ready(function(){
+			rememberPass()
+		});
+
+</script>
+
+<%+footer%>

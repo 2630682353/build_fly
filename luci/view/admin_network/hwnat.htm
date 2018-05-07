@@ -1,0 +1,88 @@
+<%#
+LuCI - Lua Configuration Interface
+Copyright 2010 Jo-Philipp Wich <xm@subsignal.org>
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+$Id$
+
+-%>
+
+<%+header%>
+
+<%
+local fs   = require "nixio.fs"
+local enabled = fs.access("/sys/module/hw_nat/refcnt")
+%>
+
+<script type="text/javascript" src="<%=resource%>/cbi.js"></script>
+<script type="text/javascript">//<![CDATA[
+	var stxhr = new XHR();
+
+	function enable_hwnat(enable)
+	{
+
+		if (enable)
+			action = "enable";
+		else
+			action = "disable";
+
+		var legend = document.getElementById('diag-rc-legend');
+		var output = document.getElementById('diag-rc-output');
+
+		output.innerHTML =
+			'<img src="<%=resource%>/icons/loading.gif" alt="<%:Loading%>" style="vertical-align:middle" /> ' +
+			'<%:Waiting for command to complete...%>'
+		;
+
+		legend.parentNode.style.display = 'block';
+		legend.style.display = 'inline';
+
+		stxhr.get('<%=luci.dispatcher.build_url("admin", "network")%>/hwnat_' + action, null,
+			function(x)
+			{
+				if (x.responseText == "0")
+				{
+					window.location.href="<%=luci.dispatcher.build_url("admin", "network", "hwnat")%>";
+				}
+				else
+				{
+					legend.style.display = 'none';
+					output.innerHTML = '<span class="error"><%:failed!%></span>';
+				}
+			}
+		);
+	}
+//]]></script>
+
+<form method="post" action="<%=pcdata(luci.http.getenv("REQUEST_URI"))%>">
+	<div class="cbi-map">
+		<h2><a id="content" name="content"><%:NAT Acceleration%></a></h2>
+
+		<fieldset class="cbi-section">
+			<legend><%:Hardware NAT%></legend>
+
+			<p>Hardware NAT saves a lot of CPU resource.</p>
+			<br />
+			<% if enabled then %>
+			<input type="button" value="<%:Disable Hardware NAT%>" class="cbi-button-reset cbi-button" onclick="enable_hwnat(false)" />
+			<% else %>
+			<input type="button" value="<%:Enable Hardware NAT%>" class="cbi-button-reload cbi-button" onclick="enable_hwnat(true)" />
+			<% end %>
+
+			<br style="clear:both" /><br />
+
+		</fieldset>
+	</div>
+
+	<fieldset class="cbi-section" style="display:none">
+		<legend id="diag-rc-legend"><%:Apply configuration ...%></legend>
+		<span id="diag-rc-output"></span>
+	</fieldset>
+</form>
+
+<%+footer%>

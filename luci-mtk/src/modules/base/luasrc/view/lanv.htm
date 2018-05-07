@@ -1,0 +1,605 @@
+<%+header%>
+<%
+
+		local ntm = require "luci.model.network".init()
+		local fwm = require "luci.model.firewall".init()
+		local uci = require "luci.model.uci".cursor()
+		local dhcpIgnore = uci:get("dhcp","lan","ignore")
+		
+		local net
+		local ifaces = { }
+		for _, net in ipairs(ntm:get_networks()) do
+			if net:name() == "V3" then
+				ifaces["v3_ipaddr"]= net:ipaddr()
+				ifaces["v3_netmask"]=net:netmask()
+			end
+			if net:name() == "V4" then
+				ifaces["v4_ipaddr"]= net:ipaddr()
+				ifaces["v4_netmask"]=net:netmask()
+			end
+			if net:name() == "V5" then
+				ifaces["v5_ipaddr"]= net:ipaddr()
+				ifaces["v5_netmask"]=net:netmask()
+			end
+		end
+		local portssta = {}
+		local vlan_sta = {}
+		local dhcp_flags = {v3=0,v4=0,v5=0}
+		uci:foreach("network", "switch_vlan",
+			function(s)
+				vlan_sta[s.vlan] = 1
+				dhcp_flags['v'..s.vlan] = 1
+				local pt 
+				for pt in (s.ports):gmatch("%w+") do
+					portssta[pt] = s.vlan 
+				end
+			 end)
+		local dhcps = {}
+		
+		uci:foreach("dhcp", "dhcp",
+			function(s)
+				if s.interface=="V3" then
+					dhcps["v3_start"] = s.start
+					dhcps["v3_limit"] = s.limit
+					dhcps["v3_leasetime"] = s.leasetime
+					if vlan_sta['3'] == 1 then
+						dhcp_flags['v3'] = 0
+					end
+				end
+				if s.interface=="V4" then
+					dhcps["v4_start"] = s.start
+					dhcps["v4_limit"] = s.limit
+					dhcps["v4_leasetime"] = s.leasetime
+					if vlan_sta['4'] == 1 then
+						dhcp_flags['v4'] = 0
+					end
+				end
+				if s.interface=="V5" then
+					dhcps["v5_start"] = s.start
+					dhcps["v5_limit"] = s.limit
+					dhcps["v5_leasetime"] = s.leasetime
+					if vlan_sta['5'] == 1 then
+						dhcp_flags['v5'] = 0
+					end
+				end
+			 end)
+
+		%>
+
+
+
+<div class="r-box">
+                    <!-- 路由器状态 -->
+    <div class="sub" id="m_1_box" style="display:block">
+        
+    	 <form method="post" name="cbi" action="" enctype="multipart/form-data" 
+          	onreset="return cbi_validate_reset(this)" >
+
+    	<fieldset class="cbi-section" id="vlan_xhr" style="display:none">
+			<legend></legend>
+			<br/>
+			<img src="<%=resource%>/icons/loading.gif" alt="<%:Loading%>" style="vertical-align:middle" />
+			<span id="vlan_xhr-status"><%:Waiting for changes to be applied...%></span>
+		</fieldset>
+        <div class="panel">
+            <h2>端口vlan</h2>
+            <div class="bd-box">
+                <div class="port-box">端口0 
+                	<p id="port0_link"><img src="/luci-static/resources/icons/port_down.png"></img></p>
+                	<select class="form-control" id="s0" onchange="select_change(this)">
+                		<option id="1" value="1" >LAN</option>
+                		<option id="3" value="3" selected="selected">VLAN3</option>
+                		<option id="4" value="4" >VLAN4</option>
+                		<option id="5" value="5" >VLAN5</option>
+                	</select>
+                </div>
+                <div class="port-box">端口1 
+                	<p id="port1_link"><img src="/luci-static/resources/icons/port_down.png"></img></p>
+                	<select class="form-control" id="s1" onchange="select_change(this)">
+                		<option id="1" value="1">LAN</option>
+                		<option id="3" value="3">VLAN3</option>
+                		<option id="4" value="4">VLAN4</option>
+                		<option id="5" value="5">VLAN5</option>
+                	</select>
+                </div>
+                <div class="port-box">端口2 
+                	<p id="port2_link"><img src="/luci-static/resources/icons/port_down.png"></img></p>
+                	<select class="form-control" id="s2" onchange="select_change(this)">
+                		<option id="1" value="1">LAN</option>
+                		<option id="3" value="3">VLAN3</option>
+                		<option id="4" value="4">VLAN4</option>
+                		<option id="5" value="5">VLAN5</option>
+                	</select>
+                </div>
+                <div class="port-box">端口3 
+                	<p id="port3_link"><img src="/luci-static/resources/icons/port_down.png"></img></p>
+                	<select class="form-control" id="s3" onchange="select_change(this)">
+                		<option id="1" value="1">LAN</option>
+                		<option id="3" value="3">VLAN3</option>
+                		<option id="4" value="4">VLAN4</option>
+                		<option id="5" value="5">VLAN5</option>
+                	</select>
+                </div>
+                 <div class="port-box">WAN口
+                	<p id="port4_link"><img src="/luci-static/resources/icons/port_down.png"></img></p>
+                 	<div  style='display:inline-block;width:70px;height:27px;'></div>
+                </div>
+          
+            </div>
+        </div>
+
+        <div class="panel" id="v3_panel" style="display:none">
+            <h2>vlan3 设置</h2>
+            <div class="bd-box">
+        		<div class="text-val" id="cbi-network-v3-ipaddr">
+					<div class="value-value">
+						<span class="text-name">IPv4地址</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.network.v3.ipaddr" id="v3_ipaddr" value="192.168.1.1" placeholder="请输入ipv4地址"/>
+						<script type="text/javascript">
+							cbi_validate_field('v3_ipaddr', true, 'ip4addr');
+						</script>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-network-v3-netmask">
+					<div class="value-value radio-box">
+						<span class="text-name">IPv4子网掩码</span>
+						<select class="form-control" onchange="cbi_d_update(this.id)" id="v3_netmask" name="cbid.network.v3.netmask">
+						<option id="cbi-network-v3-netmask-255.255.255.0" value="255.255.255.0" selected="selected">255.255.255.0</option><option id="cbi-network-v3-netmask-255.255.0.0" value="255.255.0.0">255.255.0.0</option><option id="cbi-network-v3-netmask-255.0.0.0" value="255.0.0.0">255.0.0.0</option>
+						</select>
+					</div>
+				</div>
+
+				<div class="divflag" style="text-align: center">
+					<span class="text-name">dhcp禁用</span>
+					<div class style="display:inline-block;width:238px;text-align:left;vertical-align:top">
+						<span id = "mycheckbox_v3" 
+							class="switch-off" themecolor="36ca36" 
+							style="border-color:rgb(223,223,223);box-shadow:rgb(223,223,223) 0px 0px 0px 0px inset; background-color:rgb(255,255,255);" >
+						</span>
+						<input type="hidden" name="v3_dhcp_ignore" id="v3_dhcp_ignore" value="<%=dhcp_flags['v3']%>"/>
+					</div>
+				</div>
+	
+				<div class="text-val" id="cbi-dhcp-v3-start">
+					<div class="value-value">
+						<span class="text-name">起始地址</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v3.start" id="v3_start" value="192.168.1.100" placeholder="请输入起始ipv4地址"/>
+						<script type="text/javascript">
+							cbi_validate_field('v3_start', true, 'ip4addr');
+						</script>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-dhcp-v3-limit">
+					<div class="value-value">
+						<span class="text-name">客户数</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v3.limit" id="v3_limit" value="140" placeholder="分配的ip数量"/>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-dhcp-v3-leasetime">
+					<div class="value-value">
+						<span class="text-name">租用时间</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v3.leasetime" id="v3_leasetime" value="12h" placeholder="h(小时)m(分钟) 例:12h"/>
+					</div>
+				</div>
+			</div>
+        </div>
+
+        <div class="panel" id="v4_panel" style="display:none">
+            <h2>vlan4 设置</h2>
+            <div class="bd-box">
+        		<div class="text-val" id="cbi-network-v4-ipaddr">
+					<div class="value-value">
+						<span class="text-name">IPv4地址</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.network.v4.ipaddr" id="v4_ipaddr" value="192.168.1.1" placeholder="请输入ipv4地址"/>
+						<script type="text/javascript">
+							cbi_validate_field('v4_ipaddr', true, 'ip4addr');
+						</script>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-network-v4-netmask">
+					<div class="value-value radio-box">
+						<span class="text-name">IPv4子网掩码</span>
+						<select class="form-control" onchange="cbi_d_update(this.id)" id="v4_netmask" name="cbid.network.v4.netmask">
+						<option id="cbi-network-v4-netmask-255.255.255.0" value="255.255.255.0" selected="selected">255.255.255.0</option><option id="cbi-network-v4-netmask-255.255.0.0" value="255.255.0.0">255.255.0.0</option><option id="cbi-network-v4-netmask-255.0.0.0" value="255.0.0.0">255.0.0.0</option>
+						</select>
+					</div>
+				</div>
+
+				<div class="divflag" style="text-align: center">
+					<span class="text-name">dhcp禁用</span>
+					<div class style="display:inline-block;width:238px;text-align:left;vertical-align:top">
+						<span id = "mycheckbox_v4" 
+							class="switch-off" themecolor="36ca36" 
+							style="border-color:rgb(223,223,223);box-shadow:rgb(223,223,223) 0px 0px 0px 0px inset; background-color:rgb(255,255,255);" >
+						</span>
+						<input type="hidden" name="v4_dhcp_ignore" id="v4_dhcp_ignore" value="<%=dhcp_flags['v4']%>"/>
+					</div>
+				</div>
+				
+				<div class="text-val" id="cbi-dhcp-v4-start">
+					<div class="value-value">
+						<span class="text-name">起始地址</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v4.start" id="v4_start" value="192.168.1.100" placeholder="请输入起始ipv4地址"/>
+						<script type="text/javascript">
+							cbi_validate_field('v4_start', true, 'ip4addr');
+						</script>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-dhcp-v4-limit">
+					<div class="value-value">
+						<span class="text-name">客户数</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v4.limit" id="v4_limit" value="140" placeholder="分配的ip数量"/>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-dhcp-v4-leasetime">
+					<div class="value-value">
+						<span class="text-name">租用时间</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v4.leasetime" id="v4_leasetime" value="12h" placeholder="h(小时)m(分钟) 例:12h"/>
+					</div>
+				</div>
+			</div>
+        </div>
+
+        <div class="panel" id="v5_panel" style="display:none">
+            <h2>vlan5 设置</h2>
+            <div class="bd-box">
+        		<div class="text-val" id="cbi-network-v5-ipaddr">
+					<div class="value-value">
+						<span class="text-name">IPv4地址</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.network.v5.ipaddr" id="v5_ipaddr" value="192.168.1.1" placeholder="请输入ipv4地址"/>
+						<script type="text/javascript">
+							cbi_validate_field('v5_ipaddr', true, 'ip4addr');
+						</script>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-network-v5-netmask">
+					<div class="value-value radio-box">
+						<span class="text-name">IPv4子网掩码</span>
+						<select class="form-control" onchange="cbi_d_update(this.id)" id="v5_netmask" name="cbid.network.v5.netmask">
+						<option id="cbi-network-v5-netmask-255.255.255.0" value="255.255.255.0" selected="selected">255.255.255.0</option><option id="cbi-network-v5-netmask-255.255.0.0" value="255.255.0.0">255.255.0.0</option><option id="cbi-network-v5-netmask-255.0.0.0" value="255.0.0.0">255.0.0.0</option>
+						</select>
+					</div>
+				</div>
+
+				<div class="divflag" style="text-align: center">
+					<span class="text-name">dhcp禁用</span>
+					<div class style="display:inline-block;width:238px;text-align:left;vertical-align:top">
+						<span id = "mycheckbox_v5" 
+							class="switch-off" themecolor="36ca36" 
+							style="border-color:rgb(223,223,223);box-shadow:rgb(223,223,223) 0px 0px 0px 0px inset; background-color:rgb(255,255,255);" >
+						</span>
+						<input type="hidden" name="v5_dhcp_ignore" id="v5_dhcp_ignore" value="<%=dhcp_flags['v5']%>"/>
+					</div>
+				</div>
+				
+				<div class="text-val" id="cbi-dhcp-v5-start">
+					<div class="value-value">
+						<span class="text-name">起始地址</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v5.start" id="v5_start" value="192.168.1.100" placeholder="请输入起始ipv4地址"/>
+						<script type="text/javascript">
+							cbi_validate_field('v5_start', true, 'ip4addr');
+						</script>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-dhcp-v5-limit">
+					<div class="value-value">
+						<span class="text-name">客户数</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v5.limit" id="v5_limit" value="140" placeholder="分配的ip数量"/>
+					</div>
+				</div>
+
+				<div class="text-val" id="cbi-dhcp-v5-leasetime">
+					<div class="value-value">
+						<span class="text-name">租用时间</span>
+						<input class="form-control textbox" type="text" class="cbi-input-text" onchange="cbi_d_update(this.id)" name="cbid.dhcp.v5.leasetime" id="v5_leasetime" value="12h" placeholder="h(小时)m(分钟) 例:12h"/>
+					</div>
+				</div>
+			</div>
+        </div>
+        <div class="sb">
+			<input class="cbi-button cbi-button-apply" type="button" onclick="vlan_sub()" name="cbi.apply" value="保存&#38;应用" />
+			<script type="text/javascript">
+				function my_cbi_validate(form, errmsg)
+				{
+					if( form.cbi_validators )
+					{
+						for( var i = 0; i < form.cbi_validators.length; i++ )
+						{
+							var validator = form.cbi_validators[i];
+							if( !validator() && errmsg )
+							{
+								alert(errmsg);
+								return false;
+							}
+						}
+					}
+
+					return true;
+				}
+
+				function vlan_sub(){
+					var form1=document.forms[0];
+					if (my_cbi_validate(form1, '一些项目的值无效，无法保存！') == false)
+						return
+					var apply_xhr = new XHR();
+					var json_obj = new Object();
+					var status = [];
+					var v1 = "";
+					var v3 = "";
+					var v4 = "";
+					var v5 = "";
+					status[0] = $('#s0').val();
+					status[1] = $('#s1').val();
+					status[2] = $('#s2').val();
+					status[3] = $('#s3').val();
+					for (var i=0;i<4;i++) {
+						switch(status[i]) {
+							case "1":
+								v1 = v1 + " " + i;
+								break;
+							case "3":
+								v3 = v3 + " " + i;
+								json_obj["v3_ipaddr"] = $('#v3_ipaddr').val();
+								json_obj["v3_netmask"] = $('#v3_netmask').val();
+								json_obj["v3_start"] = $('#v3_start').val();
+								json_obj["v3_limit"] = $('#v3_limit').val();
+								json_obj["v3_leasetime"] = $('#v3_leasetime').val();
+								json_obj["v3_dhcp_ignore"] = $('#v3_dhcp_ignore').val();
+								break;
+							case "4":
+								v4 = v4 + " " + i;
+								json_obj["v4_ipaddr"] = $('#v4_ipaddr').val();
+								json_obj["v4_netmask"] = $('#v4_netmask').val();
+								json_obj["v4_start"] = $('#v4_start').val();
+								json_obj["v4_limit"] = $('#v4_limit').val();
+								json_obj["v4_leasetime"] = $('#v4_leasetime').val();
+								json_obj["v4_dhcp_ignore"] = $('#v4_dhcp_ignore').val();
+								break;
+							case "5":
+								v5 = v5 + " " + i;
+								json_obj["v5_ipaddr"] = $('#v5_ipaddr').val();
+								json_obj["v5_netmask"] = $('#v5_netmask').val();
+								json_obj["v5_start"] = $('#v5_start').val();
+								json_obj["v5_limit"] = $('#v5_limit').val();
+								json_obj["v5_leasetime"] = $('#v5_leasetime').val();
+								json_obj["v5_dhcp_ignore"] = $('#v5_dhcp_ignore').val();
+								break;
+						}
+					}
+					json_obj["v1_ports"] = v1;
+					json_obj["v3_ports"] = v3;
+					json_obj["v4_ports"] = v4;
+					json_obj["v5_ports"] = v5;
+					apply_xhr.get('<%=luci.dispatcher.build_url("admin","network", "lanv")%>', json_obj,
+						function(x){
+							var obj = JSON.parse(x.responseText);
+							if (obj.code == 0) {
+									$('#vlan_xhr').css("display","block");
+									apply_xhr.get('<%=luci.dispatcher.build_url("servicectl", "restart", "network,dncp,firewall")%>', null,
+										function() {
+											var checkfinish = function() {
+												apply_xhr.get('<%=luci.dispatcher.build_url("servicectl", "status")%>', null,
+													function(x) {
+														if( x.responseText == 'finish' )
+														{
+															var e = document.getElementById('vlan_xhr-status');
+															if( e )
+															{
+																e.innerHTML = '<%:Configuration applied.%>';
+																window.setTimeout(function() {
+																	e.parentNode.style.display = 'none';
+																	<% if redirect then %>location.href='<%=redirect%>';<% end %>
+																}, 1000);
+															}
+														}
+														else
+														{
+															var e = document.getElementById('vlan_xhr-status');
+															if( e && x.responseText ) e.innerHTML = x.responseText;
+
+															window.setTimeout(checkfinish, 1000);
+														}
+													}
+												);
+											}
+
+											window.setTimeout(checkfinish, 1000);
+											window.setTimeout("self.location='<%=redirect%>'", 1000);
+										}
+									);
+								}
+							}
+						);
+				}
+
+			</script>
+		</div>
+	</form>
+    </div>
+                    <!-- 路由器状态 end-->
+
+<%+footer%>
+
+<script type="text/javascript">
+
+		var port0_sta = document.getElementById('port0_link');
+		var port1_sta = document.getElementById('port1_link');
+		var port2_sta = document.getElementById('port2_link');
+		var port3_sta = document.getElementById('port3_link');
+		var port4_sta = document.getElementById('port4_link');
+		XHR.poll(5, '<%=build_url("admin/port_link")%>', null,
+					function(x) {
+						if (x.responseText) {
+							var obj = JSON.parse(x.responseText);
+
+							var inhtml;
+							if (obj) {
+								for (var item in obj) {
+									if (obj[item])
+										inhtml = "<img src='/luci-static/resources/icons/port_up.png'></img>";
+									else
+										inhtml = "<img src='/luci-static/resources/icons/port_down.png'></img>";
+									switch (item ) {
+									case "port0":
+										port0_sta.innerHTML=inhtml;
+										break;
+									case "port1":
+										port1_sta.innerHTML=inhtml;
+										break;
+									case "port2":
+										port2_sta.innerHTML=inhtml;
+										break;
+									case "port3":
+										port3_sta.innerHTML=inhtml;
+										break;
+									case "port4":
+										port4_sta.innerHTML=inhtml;
+										break;
+									}
+								}
+							}
+						}
+					}
+			);
+
+		
+		
+
+		function select_change(obj) {		
+			var status = [];
+			$('#v3_panel').css("display","none");
+			$('#v4_panel').css("display","none");
+			$('#v5_panel').css("display","none");
+			status[0] = $('#s0').val();
+			status[1] = $('#s1').val();
+			status[2] = $('#s2').val();
+			status[3] = $('#s3').val();
+			for (var i=0;i<4;i++) {
+				switch(status[i]) {
+
+					case "3":
+						$('#v3_panel').css("display","block");
+						break;
+					case "4":
+						$('#v4_panel').css("display","block");
+						break;
+					case "5":
+						$('#v5_panel').css("display","block");
+						break;
+				}
+			}
+		
+
+		}
+
+		$('#s0').val('<%=portssta['0']%>')
+		$('#s1').val('<%=portssta['1']%>')
+		$('#s2').val('<%=portssta['2']%>')
+		$('#s3').val('<%=portssta['3']%>')
+		$('#v3_ipaddr').val('<%=ifaces["v3_ipaddr"]%>')
+		$('#v3_netmask').val('<%=ifaces["v3_netmask"]%>')
+		$('#v4_ipaddr').val('<%=ifaces["v4_ipaddr"]%>')
+		$('#v4_netmask').val('<%=ifaces["v4_netmask"]%>')
+		$('#v5_ipaddr').val('<%=ifaces["v5_ipaddr"]%>')
+		$('#v5_netmask').val('<%=ifaces["v5_netmask"]%>')
+		$('#v3_start').val('<%=dhcps["v3_start"]%>')
+		$('#v3_limit').val('<%=dhcps["v3_limit"]%>')
+		$('#v3_leasetime').val('<%=dhcps["v3_leasetime"]%>')
+		$('#v4_start').val('<%=dhcps["v4_start"]%>')
+		$('#v4_limit').val('<%=dhcps["v4_limit"]%>')
+		$('#v4_leasetime').val('<%=dhcps["v4_leasetime"]%>')
+		$('#v5_start').val('<%=dhcps["v5_start"]%>')
+		$('#v5_limit').val('<%=dhcps["v5_limit"]%>')
+		$('#v5_leasetime').val('<%=dhcps["v5_leasetime"]%>')
+
+		select_change(null);
+	
+		function rememberPass(){
+			switchEvent("#mycheckbox_v3",function(){
+				$("#v3_dhcp_ignore").val("1")
+				dhcp_update("v3_dhcp_ignore")
+			},function(){
+			//	$("#cbid\\.dhcp\\.lan\\.ignore").attr('checked',false);
+				$("#v3_dhcp_ignore").val("0")
+				dhcp_update("v3_dhcp_ignore")
+			});
+
+			switchEvent("#mycheckbox_v4",function(){
+				$("#v4_dhcp_ignore").val("1")
+				dhcp_update("v4_dhcp_ignore")
+			},function(){
+				$("#v4_dhcp_ignore").val("0")
+				dhcp_update("v4_dhcp_ignore")
+			});
+
+			switchEvent("#mycheckbox_v5",function(){
+				$("#v5_dhcp_ignore").val("1")
+				dhcp_update("v5_dhcp_ignore")
+			},function(){
+				$("#v5_dhcp_ignore").val("0")
+				dhcp_update("v5_dhcp_ignore")
+			});
+		}
+		jQuery(document).ready(function(){
+			rememberPass()
+		});
+
+		function dhcp_update(id) {
+			switch (id) {
+			case "v3_dhcp_ignore":
+				if ($('#v3_dhcp_ignore').val() == "1") {
+					$('#cbi-dhcp-v3-start').css("display","none")
+					$('#cbi-dhcp-v3-leasetime').css("display","none")
+					$('#cbi-dhcp-v3-limit').css("display","none")
+					$('#mycheckbox_v3').attr("class","switch-on")
+				}
+				else {
+					$('#cbi-dhcp-v3-start').css("display","block")
+					$('#cbi-dhcp-v3-leasetime').css("display","block")
+					$('#cbi-dhcp-v3-limit').css("display","block")
+					$('#mycheckbox_v3').attr("class","switch-off")
+				}
+				break;
+			case "v4_dhcp_ignore":
+				if ($('#v4_dhcp_ignore').val() == "1") {
+					$('#cbi-dhcp-v4-start').css("display","none")
+					$('#cbi-dhcp-v4-leasetime').css("display","none")
+					$('#cbi-dhcp-v4-limit').css("display","none")
+					$('#mycheckbox_v4').attr("class","switch-on")
+				}
+				else {
+					$('#cbi-dhcp-v4-start').css("display","block")
+					$('#cbi-dhcp-v4-leasetime').css("display","block")
+					$('#cbi-dhcp-v4-limit').css("display","block")
+					$('#mycheckbox_v4').attr("class","switch-off")
+				}
+				break;
+			case "v5_dhcp_ignore":
+				if ($('#v5_dhcp_ignore').val() == "1") {
+					$('#cbi-dhcp-v5-start').css("display","none")
+					$('#cbi-dhcp-v5-leasetime').css("display","none")
+					$('#cbi-dhcp-v5-limit').css("display","none")
+					$('#mycheckbox_v5').attr("class","switch-on")
+				}
+				else {
+					$('#cbi-dhcp-v5-start').css("display","block")
+					$('#cbi-dhcp-v5-leasetime').css("display","block")
+					$('#cbi-dhcp-v5-limit').css("display","block")
+					$('#mycheckbox_v5').attr("class","switch-off")
+				}
+				break;
+			}
+		}
+		dhcp_update("v3_dhcp_ignore")
+		dhcp_update("v4_dhcp_ignore")
+		dhcp_update("v5_dhcp_ignore")
+
+</script>

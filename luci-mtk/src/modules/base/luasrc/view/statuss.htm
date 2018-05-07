@@ -1,0 +1,390 @@
+<%+header%>
+<%
+
+		local ntm = require "luci.model.network".init()
+		local fwm = require "luci.model.firewall".init()
+		local uci = require "luci.model.uci".cursor()
+		local dhcpIgnore = uci:get("dhcp","lan","ignore")
+		
+		local net
+		local ifaces = { }
+		for _, net in ipairs(ntm:get_networks()) do
+			if net:name() ~= "loopback" then
+				local z = fwm:get_zone_by_network(net:name())
+				ifaces[#ifaces+1] = net:name()
+
+			end
+		end
+
+		
+	
+	
+		local hostname=uci:get("system","system[0]","hostname")
+		local hard_version=uci:get_first("system","system","hard_version")
+		local firmware_version=uci:get_first("system","system","soft_version")
+		
+
+		local netlist = { }
+		local netdevs = { }
+	
+		local connected_dev = luci.sys.exec("cat /var/dhcp.leases | wc -l")
+		connected_dev = string.sub(connected_dev, 1, #connected_dev-1)
+
+		%>
+
+<script type="text/javascript">
+	
+
+var G;
+	var TIME = 0;
+	var RXB  = 1;
+	var RXP  = 2;
+	var TXB  = 3;
+	var TXP  = 4;
+
+	var width  = 760;
+	var height = 300;
+	var step   = 5;
+
+	var data_wanted = Math.floor(width / step);
+	var data_fill   = 0;
+	var data_stamp  = 0;
+
+	var data_rx = [ ];
+	var data_tx = [ ];
+
+	var line_rx;
+	var line_tx;
+
+	var label_25;
+	var label_50;
+	var label_75;
+
+	var label_rx_cur;
+	var label_rx_avg;
+	var label_rx_peak;
+
+	var label_tx_cur;
+	var label_tx_avg;
+	var label_tx_peak;
+
+	var label_scale;
+	
+	
+
+
+	function bandwidth_label(bytes, br)
+	{
+		var uby = '<%:k%>';
+		var kby = (bytes / 1024);
+
+		if (kby >= 1024)
+		{
+			uby = '<%:M%>';
+			kby = kby / 1024;
+		}
+
+		var ubi = '<%:kbit/s%>';
+		var kbi = (bytes * 8 / 1024);
+
+		if (kbi >= 1024)
+		{
+			ubi = '<%:Mbit/s%>';
+			kbi = kbi / 1024;
+		}
+
+		return kby.toFixed(2)+" "+uby;
+	}
+
+
+
+			
+				XHR.poll(3, '<%=build_url("admin/status/realtime/bandwidth_status", "eth0.2")%>', null,
+					function(x, data)
+					{
+						var data_max   = 0;
+						var data_scale = 0;
+
+						var data_rx_avg = 0;
+						var data_tx_avg = 0;
+
+						var data_rx_peak = 0;
+						var data_tx_peak = 0;
+						
+
+						for (var i = data_stamp ? 0 : 1; i < data.length; i++)
+						{
+							/* skip overlapping entries */
+							if (data[i][TIME] <= data_stamp)
+								continue;
+
+							/* normalize difference against time interval */
+							if (i > 0)
+							{
+								var time_delta = data[i][TIME] - data[i-1][TIME];
+								if (time_delta)
+								{
+									data_rx.push((data[i][RXB] - data[i-1][RXB]) / time_delta);
+									data_tx.push((data[i][TXB] - data[i-1][TXB]) / time_delta);
+								}
+							}
+						}
+
+						/* cut off outdated entries */
+						data_rx = data_rx.slice(data_rx.length - 180, data_rx.length);
+						data_tx = data_tx.slice(data_tx.length - 180, data_tx.length);
+
+						/* find peak */
+						for (var i = 0; i < data_rx.length; i++)
+						{
+							data_max = Math.max(data_max, data_rx[i]);
+							data_max = Math.max(data_max, data_tx[i]);
+
+							data_rx_peak = Math.max(data_rx_peak, data_rx[i]);
+							data_tx_peak = Math.max(data_tx_peak, data_tx[i]);
+
+							if (i > 0)
+							{
+								data_rx_avg = (data_rx_avg + data_rx[i]) / 2;
+								data_tx_avg = (data_tx_avg + data_tx[i]) / 2;
+							}
+							else
+							{
+								data_rx_avg = data_rx[i];
+								data_tx_avg = data_tx[i];
+							}
+						}
+
+						/* remember current timestamp, calculate horizontal scale */
+						data_stamp = data[data.length-1][TIME];
+						data_scale = height / (data_max * 1.1);
+
+
+						/* plot data */
+						var pt_rx = '0,' + height;
+						var pt_tx = '0,' + height;
+
+						var y_rx = 0;
+						var y_tx = 0;
+
+						for (var i = 0; i < data_rx.length; i++)
+						{
+							var x = i * step;
+
+							y_rx = height - Math.floor(data_rx[i] * data_scale);
+							y_tx = height - Math.floor(data_tx[i] * data_scale);
+
+							pt_rx += ' ' + x + ',' + y_rx;
+							pt_tx += ' ' + x + ',' + y_tx;
+						}
+
+						pt_rx += ' ' + width + ',' + y_rx + ' ' + width + ',' + height;
+						pt_tx += ' ' + width + ',' + y_tx + ' ' + width + ',' + height;
+
+
+						label_rx_cur  = document.getElementById('curSpeed');
+						label_tx_cur  = document.getElementById('up_speed');
+
+						label_rx_cur.innerHTML = bandwidth_label(data_rx[data_rx.length-1], true);
+						label_tx_cur.innerHTML = bandwidth_label(data_tx[data_tx.length-1], true);
+
+				}
+			);
+
+
+	XHR.get('<%=luci.dispatcher.build_url("admin", "network")%>/diag_ping/' + '114.114.114.114', null,
+				function(x)
+				{
+					if (x.responseText)
+					{
+						var output2 = document.getElementById('netStatus');
+						if(x.responseText.indexOf("100% packet loss") >= 0 )  
+						{
+							
+							output2.innerHTML = "未联网";
+						}
+						else if(x.responseText.indexOf("0% packet loss") >= 0)
+						{
+							
+							output2.innerHTML = "已联网";
+								
+						}else
+						{
+							
+							output2.innerHTML = "未联网";
+						}
+						
+					}
+					else
+					{
+
+					}
+				}
+			);
+
+	XHR.get('<%=build_url("admin/status/overview")%>', { status: 1 },
+			function(x, info)
+			{
+			
+				var e;
+				if (e = document.getElementById('ontime'))
+					e.innerHTML = String.format('%t', info.uptime);
+			}
+		);
+
+XHR.get('<%=luci.dispatcher.build_url("admin", "network", "iface_status", table.concat(ifaces, ","))%>', null,
+		function(x, ifcs)
+		{
+			if (ifcs)
+			{ 
+				for (var idx = 0; idx < ifcs.length; idx++)
+				{
+					var ifc = ifcs[idx];
+					var html = '';		
+					if(ifc.id=="wan")
+					{
+
+					document.getElementById("netType").innerHTML=ifc.proto;
+					document.getElementById("wanIP").innerHTML=ifc.ipaddrs[0].addr;
+					document.getElementById("mask").innerHTML=ifc.ipaddrs[0].netmask;
+					document.getElementById("gw").innerHTML=ifc.gwaddr;
+					document.getElementById("macTy").innerHTML=ifc.macaddr;
+					
+					}
+					if(ifc.id=="lan")
+					{
+
+					
+					document.getElementById("lanIP").innerHTML=ifc.ipaddrs[0].addr;
+				
+					
+					}
+
+				}
+			}
+		}
+	);
+
+</script>
+<div class="r-box">
+                    <!-- 路由器状态 -->
+                    <div class="sub" id="m_1_box" style="display:block">
+                        <div class="panel">
+                            <h2>网络连接状态</h2>
+                            <div class="bd-box">
+                                <!-- 连接成功 -->
+                                <div class="state-img"></div>
+                                <div class="state-txt">
+                                    <span class="s1">连接设备</span>
+                                    <span class="s2">路由</span>
+                                    <span class="s3">网络</span>
+                                </div>
+                                <div class="state-desc" id="netStatus">...</div>
+                                <!-- 连接成功 end-->
+                            </div>
+                        </div>
+
+                        <div class="panel">
+                            <h2>连接的设备及数据</h2>
+                            <div class="bd-box">
+                                <a href="javascript:;" class="data2">
+                                    <span class="sp-t blue" id="count_devices"><%=connected_dev%></span>
+                                    <span class="sp-b"><i class="ico-1"></i>已连接设备</span>
+                                </a>
+                                <a href="javascript:;" class="data2">
+                                    <span class="sp-t pansy" id="curSpeed">...</span>
+                                    <span class="sp-b"><i class="ico-2"></i>下载速度</span>
+                                </a>
+                                <a href="javascript:;" class="data2">
+                                    <span class="sp-t pink" id="up_speed">...</span>
+                                    <span class="sp-b"><i class="ico-3"></i>上传速度</span>
+                                </a>
+                            </div>
+                        </div>
+
+
+                        <div class="panel">
+                            <h2>系统信息</h2>
+                            <div class="bd-box">
+                                <table width="100%" cellpadding="0" cellspacing="0" class="sys_tb">
+                                    <tr>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">连接类型</span>
+                                                <span class="blue" id="netType">...</span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">WAN IP</span>
+                                                <span class="blue" id="wanIP">...</span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">运行时间</span>
+                                                <span class="blue" id="ontime">...</span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">子网掩码</span>
+                                                <span class="blue" id="mask">...</span>
+                                            </div>
+                                        </td>                                    
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">无线名称</span>
+                                                <span class="blue" id="wifi_name">...</span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">默认网关</span>
+                                                <span class="blue" id="gw">...</span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">WAN MAC</span>
+                                                <span class="blue" id="macTy">...</span>
+                                            </div>
+                                        </td>
+
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">LAN IP</span>
+                                                <span class="blue" id="lanIP">...</span>
+                                            </div>
+                                        </td>
+                                        
+                                    </tr>
+                          
+                                    <tr>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">固件型号</span>
+                                                <span class="blue" id="firmware_model"><%=firmware_version%></span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="tblist">
+                                                <span class="tit">硬件版本</span>
+                                                <span class="blue" id="version"><%=hard_version%></span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </div>
+                        </div>
+
+                    </div>
+                    <!-- 路由器状态 end-->
+
+<%+footer%>

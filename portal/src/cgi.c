@@ -60,58 +60,14 @@ void strlower(char *s)
 	}
 }
 
-
-int auth_handle(user_query_info_t *user)
+int cgi_free_rcvbuf(void *rcv_buf)
 {
-	int temp_fd = 0, len = 0, ret = -1;
-	char file_temp[20] = {0};
-	msg_t *snd_msg = NULL;
-	msg_t *rcv_msg = NULL;
-	socket_t *temp_sock = NULL;
-	int8 *rcv_buf = NULL;
-	strcpy(file_temp, "/tmp/test.XXXXXX");
-	snd_msg = malloc(sizeof(msg_t));
-	
-	snd_msg->cmd = MSG_CMD_RADIUS_USER_AUTH;
-	snd_msg->dmid = MODULE_GET(MSG_CMD_RADIUS_USER_AUTH);
-	snd_msg->dlen = sizeof(user_query_info_t);
-	if ((temp_fd = mkstemp(file_temp)) < 0) {
-		CGI_LOG("mktemp error");
-		goto out;
-	}
-	temp_sock = unix_sock_init(file_temp);
-	
-	sock_addr_u dst_addr;
-	dst_addr.un_addr.sun_family = AF_UNIX;
-	memset(dst_addr.un_addr.sun_path, 0, sizeof(dst_addr.un_addr.sun_path));
-	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
-	if (!temp_sock)
-		goto out;
-	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_query_info_t), &dst_addr);
-	
-	if (len <= 0)
-		goto out;
-	rcv_buf = malloc(2048);
-	len = sock_recvfrom(temp_sock, rcv_buf, 2048, NULL);
-	if (len <= 0)
-		goto out;
-	rcv_msg = rcv_buf;
-	ret = rcv_msg->result;
-
-out:
-	if (temp_fd > 0)
-		close(temp_fd);
-	if (snd_msg)
-		free(snd_msg);
-	if (temp_sock) 
-		sock_delete(temp_sock);
-	if (rcv_buf) {
-		free(rcv_buf);
-	}
-	return ret;
+	msg_t *msg = container_of(rcv_buf, msg_t, data);
+	free((void *)msg);
+	return 0;
 }
 
-int query_handle(user_query_info_t *user)
+int cgi_snd_msg(int cmd, void *snd, int snd_len, void **rcv, int *rcv_len)
 {
 	int temp_fd = 0, len = 0, ret = -1;
 	char file_temp[20] = {0};
@@ -122,9 +78,9 @@ int query_handle(user_query_info_t *user)
 	strcpy(file_temp, "/tmp/test.XXXXXX");
 	snd_msg = malloc(sizeof(msg_t));
 	
-	snd_msg->cmd = MSG_CMD_MANAGE_USER_QUERY;
-	snd_msg->dmid = MODULE_GET(MSG_CMD_MANAGE_USER_QUERY);
-	snd_msg->dlen = sizeof(user_query_info_t);
+	snd_msg->cmd = cmd;
+	snd_msg->dmid = MODULE_GET(cmd);
+	snd_msg->dlen = snd_len;
 	if ((temp_fd = mkstemp(file_temp)) < 0) {
 		CGI_LOG("mktemp error");
 		goto out;
@@ -137,7 +93,7 @@ int query_handle(user_query_info_t *user)
 	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
 	if (!temp_sock)
 		goto out;
-	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_query_info_t), &dst_addr);
+	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), snd, snd_len, &dst_addr);
 	
 	if (len <= 0)
 		goto out;
@@ -147,8 +103,10 @@ int query_handle(user_query_info_t *user)
 		goto out;
 	rcv_msg = rcv_buf;
 	ret = rcv_msg->result;
-	if (ret == 0)
-		memcpy(user, rcv_msg->data, sizeof(user_query_info_t));
+	if (ret || !rcv || !rcv_len)
+		goto out;
+	*rcv = rcv_msg->data;
+	*rcv_len = rcv_msg->dlen;
 
 out:
 	if (temp_fd > 0)
@@ -157,106 +115,18 @@ out:
 		free(snd_msg);
 	if (temp_sock) 
 		sock_delete(temp_sock);
-	if (rcv_buf) {
-		free(rcv_buf);
-	}
-	return ret;
-}
-
-int register_handle(user_query_info_t *user)
-{
-	int temp_fd = 0, len = 0, ret = -1;
-	char file_temp[20] = {0};
-	msg_t *snd_msg = NULL;
-	msg_t *rcv_msg = NULL;
-	socket_t *temp_sock = NULL;
-	int8 *rcv_buf = NULL;
-	strcpy(file_temp, "/tmp/test.XXXXXX");
-	snd_msg = malloc(sizeof(msg_t));
-	
-	snd_msg->cmd = MSG_CMD_MANAGE_USER_REGISTER;
-	snd_msg->dmid = MODULE_GET(MSG_CMD_MANAGE_USER_REGISTER);
-	snd_msg->dlen = sizeof(user_query_info_t);
-	if ((temp_fd = mkstemp(file_temp)) < 0) {
-		CGI_LOG("mktemp error");
-		goto out;
-	}
-	temp_sock = unix_sock_init(file_temp);
-	
-	sock_addr_u dst_addr;
-	dst_addr.un_addr.sun_family = AF_UNIX;
-	memset(dst_addr.un_addr.sun_path, 0, sizeof(dst_addr.un_addr.sun_path));
-	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
-	if (!temp_sock)
-		goto out;
-	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_query_info_t), &dst_addr);
-	
-	if (len <= 0)
-	goto out;
-	rcv_buf = malloc(2048);
-	len = sock_recvfrom(temp_sock, rcv_buf, 2048, NULL);
-	if (len <= 0)
-		goto out;
-	rcv_msg = rcv_buf;
-	ret = rcv_msg->result;
-out:
-	if (temp_fd > 0)
-		close(temp_fd);
-	if (snd_msg)
-		free(snd_msg);
-	if (temp_sock) 
-		sock_delete(temp_sock);
-	if (rcv_buf) {
-		free(rcv_buf);
-	}
-	return ret;
-}
-
-int text_code_handle(user_query_info_t *user)
-{
-	int temp_fd = 0, len = 0, ret = -1;
-	char file_temp[20] = {0};
-	msg_t *snd_msg = NULL;
-	msg_t *rcv_msg = NULL;
-	socket_t *temp_sock = NULL;
-	int8 *rcv_buf = NULL;
-	strcpy(file_temp, "/tmp/test.XXXXXX");
-	snd_msg = malloc(sizeof(msg_t));
-	
-	snd_msg->cmd = MSG_CMD_MANAGE_TEXT_SEND;
-	snd_msg->dmid = MODULE_GET(MSG_CMD_MANAGE_TEXT_SEND);
-	snd_msg->dlen = sizeof(user_query_info_t);
-	if ((temp_fd = mkstemp(file_temp)) < 0) {
-		CGI_LOG("mktemp error");
-		goto out;
-	}
-	temp_sock = unix_sock_init(file_temp);
-	
-	sock_addr_u dst_addr;
-	dst_addr.un_addr.sun_family = AF_UNIX;
-	memset(dst_addr.un_addr.sun_path, 0, sizeof(dst_addr.un_addr.sun_path));
-	snprintf(dst_addr.un_addr.sun_path, sizeof(dst_addr.un_addr.sun_path)-1, "/tmp/%d_rcv", MODULE_GET(snd_msg->cmd));
-	if (!temp_sock)
-		goto out;
-	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_query_info_t), &dst_addr);
-	
-	if (len <= 0)
-	goto out;
-	rcv_buf = malloc(2048);
-	len = sock_recvfrom(temp_sock, rcv_buf, 2048, NULL);
-	if (len <= 0)
-		goto out;
-	rcv_msg = rcv_buf;
-	ret = rcv_msg->result;
-out:
-	if (temp_fd > 0)
-		close(temp_fd);
-	if (snd_msg)
-		free(snd_msg);
-	if (temp_sock) 
-		sock_delete(temp_sock);
-	if (rcv_buf) {
-		free(rcv_buf);
+	if (ret) {
+		if (rcv && rcv_len) {
+			*rcv = NULL;
+			*rcv_len = 0;
+		}
+		if (rcv_buf)
+			free(rcv_buf);
+	} else {
+		if (!rcv || !rcv_len) {
+			if (rcv_buf)
+				free(rcv_buf);
+		}
 	}
 	return ret;
 }
@@ -283,7 +153,7 @@ int cgi_sys_auth_handler(connection_t *con)
 	strncpy(user.mac, mac, sizeof(user.mac) -1);
 	user.vlan = atoi(vlan);
 	
-	if (auth_handle(&user) == 0) {
+	if (cgi_snd_msg(MSG_CMD_RADIUS_USER_AUTH, &user, sizeof(user), NULL, NULL) == 0) {
 		cJSON_AddNumberToObject(con->response, "code", 0);
 	} else {
 		cJSON_AddNumberToObject(con->response, "code", 1);
@@ -308,7 +178,7 @@ int cgi_sys_login_handler(connection_t *con)
 	str2mac(mac, user.mac);
 	user.ipaddr = user_ip.s_addr;
 	
-	if (auth_handle(&user) == 0) {
+	if (cgi_snd_msg(MSG_CMD_RADIUS_USER_AUTH, &user, sizeof(user), NULL, NULL) == 0) {
 		con->html_path = "portal/auth_success.html";
 	} else {
 		con->html_path = "portal/auth_fail.html";
@@ -373,16 +243,19 @@ int cgi_sys_query_handler(connection_t *con)
 		con->html_path = "portal/module/pc/mobileAuth.html";
 	else
 		con->html_path = "portal/module/mobile/mobileAuth.html";
-	ret = query_handle(&user);
-	if (ret == 0 && user.if_exist == 0) {   //0为存在该用户
+	
+	user_query_info_t *query_back = NULL;
+	int rcv_len = 0;
+	ret = cgi_snd_msg(MSG_CMD_MANAGE_USER_QUERY, &user, sizeof(user), &query_back, &rcv_len);
+	if (ret == 0 && query_back->if_exist == 0) {   //0为存在该用户
   		
-		html_tag_add(&con->tag_list, "jfwx:tel", user.username);
-		html_tag_add(&con->tag_list, "jfwx:pwd", user.password);
-		html_tag_add(&con->tag_list, "jfwx:mac", user.mac);
+		html_tag_add(&con->tag_list, "jfwx:tel", query_back->username);
+		html_tag_add(&con->tag_list, "jfwx:pwd", query_back->password);
+		html_tag_add(&con->tag_list, "jfwx:mac", query_back->mac);
 		char tem_vlan[6] = {0};
-		snprintf(tem_vlan, 5, "%d", user.vlan);
+		snprintf(tem_vlan, 5, "%d", query_back->vlan);
 		html_tag_add(&con->tag_list, "jfwx:vlan", tem_vlan);
-		html_tag_add(&con->tag_list, "jfwx:user_ip", user.user_ip);
+		html_tag_add(&con->tag_list, "jfwx:user_ip", query_back->user_ip);
 		html_tag_add(&con->tag_list, "jfwx:isOld", "1");
 	
 	} else {
@@ -393,6 +266,8 @@ int cgi_sys_query_handler(connection_t *con)
 		html_tag_add(&con->tag_list, "jfwx:user_ip", user.user_ip);
 		html_tag_add(&con->tag_list, "jfwx:isOld", "0");
 	} 
+	if (ret == 0)
+		cgi_free_rcvbuf(query_back);
 	
 out:
 	
@@ -422,7 +297,7 @@ int cgi_sys_user_register_handler(connection_t *con)
 	strncpy(user.mac, mac, sizeof(user.mac) - 1);
 	strncpy(user.user_ip, user_ip, sizeof(user.user_ip) - 1);
 	user.vlan = atoi(vlan);
-	ret = register_handle(&user);
+	ret = cgi_snd_msg(MSG_CMD_MANAGE_USER_REGISTER, &user, sizeof(user), NULL, NULL);
 
 	if ( ret== 0) {
 		cJSON_AddNumberToObject(con->response, "code", 0);
@@ -451,7 +326,7 @@ int cgi_sys_text_code_handler(connection_t *con)
 		
 	strncpy(user.username, name, sizeof(user.username) - 1);
 	
-	if (text_code_handle(&user) == 0) {
+	if (cgi_snd_msg(MSG_CMD_MANAGE_TEXT_SEND, &user, sizeof(user), NULL, NULL) == 0) {
 		cJSON_AddNumberToObject(con->response, "code", 0);
 	} else {
 		cJSON_AddNumberToObject(con->response, "code", 1);
@@ -459,6 +334,43 @@ int cgi_sys_text_code_handler(connection_t *con)
 out:
 	return 1;
 }
+
+int cgi_sys_start_app_handler(connection_t *con)
+{	
+	char *app = con_value_get(con, "app");
+	if (!app) {
+		cJSON_AddNumberToObject(con->response, "code", 1);
+		goto out;
+	}
+
+	
+	if (cgi_snd_msg(MSG_CMD_MANAGE_START_APP, app, strlen(app) + 1, NULL, NULL) == 0) {
+		cJSON_AddNumberToObject(con->response, "code", 0);
+	} else {
+		cJSON_AddNumberToObject(con->response, "code", 1);
+	}
+out:
+	return 1;
+}
+
+int cgi_sys_stop_app_handler(connection_t *con)
+{	
+	char *app = con_value_get(con, "app");
+	if (!app) {
+		cJSON_AddNumberToObject(con->response, "code", 1);
+		goto out;
+	}
+
+	
+	if (cgi_snd_msg(MSG_CMD_MANAGE_STOP_APP, app, strlen(app) + 1, NULL, NULL) == 0) {
+		cJSON_AddNumberToObject(con->response, "code", 0);
+	} else {
+		cJSON_AddNumberToObject(con->response, "code", 1);
+	}
+out:
+	return 1;
+}
+
 
 
 

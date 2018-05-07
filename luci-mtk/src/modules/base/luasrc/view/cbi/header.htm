@@ -1,0 +1,7 @@
+<%+header%>
+<div class="sub">
+          <form method="post" name="cbi" action="<%=REQUEST_URI%>" enctype="multipart/form-data" 
+          	onreset="return cbi_validate_reset(this)" onsubmit="return cbi_validate_form(this, '一些项目的值无效，无法保存！')">
+		<div><input type="hidden" name="cbi.submit" value="1" /></div>
+
+	

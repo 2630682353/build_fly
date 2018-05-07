@@ -1,0 +1,15 @@
+<%+cbi/valueheader%>
+<%
+	require "luci.fs"
+	require "luci.tools.status"
+	
+	local ntm = require "luci.model.network".init()
+	local wan = ntm:get_wannet()
+	local ipaddr = "0.0.0.0"
+	if wan then
+		ipaddr = wan:ipaddr()
+	end
+	luci.http.prepare_content("application/plain")
+	luci.http.write(ipaddr)
+-%>
+<%+cbi/valuefooter%>

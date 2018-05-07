@@ -12,9 +12,6 @@ function setCarouseImg(target,family){
     var html='';
     if(family=='mobile'){
         html+='<div class="item active">' +
-            '<img  src="../../../portal/res/img/mobile/def_bottom_info.png" alt="...">' +
-            '</div>'+
-            '<div class="item">' +
             '<img  src="../../../portal/res/img/mobile/def_load.png" alt="...">' +
             '</div>'+
             '<div class="item">' +
@@ -22,9 +19,6 @@ function setCarouseImg(target,family){
             '</div>';
     }else if(family=='pc'){
         html+='<div class="item active">' +
-            '<img src="../../../portal/res/img/pc/pc_auth.jpg" alt="...">' +
-            '</div>'+
-            '<div class="item">' +
             '<img  src="../../../portal/res/img/mobile/def_load.png" alt="...">' +
             '</div>'+
             '<div class="item">' +

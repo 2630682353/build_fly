@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include "igd_md5.h"
+#include <stdlib.h>
 
 #define TOLOWER(x) ((x) | 0x20)
 
@@ -96,6 +97,20 @@ time_t uptime()
 	}
 	return 0;
 }
+
+char * strdup(const char *s)
+{
+	char *new;
+
+	if ((s == NULL)	||
+	    ((new = malloc (strlen(s) + 1)) == NULL) ) {
+		return NULL;
+	}
+
+	strcpy (new, s);
+	return new;
+}
+
 
 int igd_md5sum(char *file, void *md5)
 {

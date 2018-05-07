@@ -1,0 +1,175 @@
+<%#
+LuCI - Lua Configuration Interface
+Copyright 2008 Steven Barth <steven@midlink.org>
+Copyright 2008-2010 Jo-Philipp Wich <xm@subsignal.org>
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+$Id: header.htm 9558 2012-12-18 13:58:22Z jow $
+
+-%>
+<%
+	local sys  = require "luci.sys"
+	local http = require "luci.http"
+	local disp = require "luci.dispatcher"
+
+	local my_uri = string.sub(REQUEST_URI, #REQUEST_URI - 2, #REQUEST_URI)
+	local nav_light = 1
+	if my_uri == "wan" then
+		nav_light = 2
+	elseif my_uri == "lan" then
+		nav_light = 3
+	elseif my_uri == "Set" then
+		nav_light = 4
+	elseif my_uri == "anv" then
+		nav_light = 6
+	end
+	local hostname = sys.hostname()
+	local load1, load5, load15 = sys.loadavg()
+
+	local request  = disp.context.path
+	local request2 = disp.context.request
+
+	local category = request[1]
+	local cattree  = category and disp.node(category)
+
+	local leaf = request2[#request2]
+
+	local tree = disp.node()
+	local node = disp.context.dispatched
+
+	local categories = disp.node_childs(tree)
+
+	local c = tree
+	local i, r
+
+	-- tag all nodes leading to this page
+for i,r in ipairs(request) do
+	if c.nodes and c.nodes[r] then
+		c = c.nodes[r]
+		c._menu_selected = true
+	end
+end
+
+   -- send as HTML5
+	http.prepare_content("text/html")
+
+	local function nodeurl(prefix, name, query)
+		local url = controller .. prefix .. name .. "/"
+		if query then
+			url = url .. http.build_querystring(query)
+		end
+		return pcdata(url)
+	end
+
+	local function subtree(prefix, node, level)
+		if not level then
+			level = 1
+		end
+
+		local childs = disp.node_childs(node)
+		if #childs > 0 then
+        
+            if level > 2 then
+%>
+	<ul class="tabs">
+		<%  
+            end
+
+			local selected_node
+			local selected_name
+			local i, v
+
+			for i, v in ipairs(childs) do
+				local nnode = node.nodes[v]
+				if nnode._menu_selected then
+					selected_node = nnode
+					selected_name = v
+				end
+                if level > 2 then
+		%>
+			<li class="tabmenu-item-<%=v%><%- if nnode._menu_selected or (node.leaf and v == leaf) then %> active<% end %>">
+			    <a href="<%=nodeurl(prefix, v, nnode.query)%>"><%=striptags(translate(nnode.title))%></a>
+			</li>
+		<%      end
+			end
+            
+            if level > 2 then
+		%>
+	</ul>
+<%          end
+
+			if selected_node then
+				subtree(prefix .. selected_name .. "/", selected_node, level + 1)
+			end
+		end
+	end
+
+require("luci.i18n").loadc("base")
+require("luci.http").prepare_content("application/xhtml+xml")
+-%>
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="Keywords" content="">
+        <meta name="Description" content="">
+        <title>智能路由设置</title>
+        <link rel="stylesheet" href="<%=resource%>/css/bootstrap.css">
+        <link rel="stylesheet" href="<%=resource%>/js/honeySwitch/honeySwitch.css">
+        <link rel="stylesheet" href="<%=resource%>/css/base.css">
+        <link rel="stylesheet" href="<%=resource%>/css/router.css">
+        <script type="text/javascript" src="<%=resource%>/js/jquery.min.1.9.js"></script> 
+        <script type="text/javascript" src="<%=resource%>/js/jquery.cookie.js"></script> 
+        <script type="text/javascript" src="<%=resource%>/js/layer/layer.js"></script>
+        <script type="text/javascript" src="<%=resource%>/js/jquery.md5.js"></script>
+        <script type="text/javascript" src="<%=resource%>/js/bootstrap.js"></script>
+        <script type="text/javascript" src="<%=resource%>/xhr.js"></script>
+        <script type="text/javascript" src="<%=resource%>/cbi.js"></script>
+        <script type="text/javascript" src="<%=resource%>/js/honeySwitch/honeySwitch.js"></script>
+         <link rel="stylesheet" href="<%=resource%>/css/jfwx.css">
+         <!--[if lt IE 9]><script src="<%=media%>/html5.js"></script><![endif]-->
+	</head>
+
+    <body>
+        <div class="top">
+            <div class="wrap">
+                <a href="http://www.aviup.com/" target="_blank"><div class="logo"></div></a>
+            </div>	
+            <p style="font-size: 25px;
+	text-align: left;font-weight: bold;">建飞无线</p>
+        </div>
+        <div class="wrap">
+            <div class="userWrap">
+                <div class="menu">
+                    <a data-id="m_1" href="<%=pcdata(luci.dispatcher.build_url("admin/statuss"))%>" 
+                    	<% if nav_light == 1 then %> class="selected"<% end %> >
+                    	<i class="i-1"></i>路由器状态</a>
+                    <a data-id="m_2" href="<%=pcdata(luci.dispatcher.build_url("admin/wan"))%>"
+                    	<% if nav_light == 2 then %> class="selected"<% end %> >
+                    	<i class="i-2"></i>上网设置</a>
+                    <a data-id="m_5" href="<%=pcdata(luci.dispatcher.build_url("admin/lan"))%>"
+                    	<% if nav_light == 3 then %> class="selected"<% end %>  ><i class="i-5"></i>LAN设置</a>
+
+                    <a data-id="m_5" href="<%=pcdata(luci.dispatcher.build_url("admin/lanv"))%>"
+                    	<% if nav_light == 6 then %> class="selected"<% end %>  ><i class="i-5"></i>VLAN设置</a>
+                   
+                    <!--                    <a data-id="m_12" href="javascript:;"><i class="i-12"></i>移动存储</a>                        -->
+                    <a data-id="m_7" href="<%=pcdata(luci.dispatcher.build_url("admin/systemSet"))%>" 
+                    	<% if nav_light == 4 then %> class="selected"<% end %> ><i class="i-7"></i>路由器管理</a>
+
+                    <a  href="<%=pcdata(luci.dispatcher.build_url("admin/logout"))%>" 
+                    	<% if nav_light == 5 then %> class="selected"<% end %> ><i class="i-6"></i>退出</a>
+                  
+                </div>
+            	<div class="r-box">
+
+               
+               
+

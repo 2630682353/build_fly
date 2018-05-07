@@ -1,0 +1,9 @@
+<%- if firstmap and messages then local msg; for _, msg in ipairs(messages) do -%>
+	<div class="errorbox"><%=pcdata(msg)%></div>
+<%- end end -%>
+
+<%-+cbi/apply_xhr-%>
+	<%- if firstmap and applymap then cbi_apply_xhr(self.config, parsechain, redirect) end -%>
+<%- self:render_children() %>
+
+

@@ -6,7 +6,8 @@
 #define PRO_SYS_LOGIN  "login"
 #define PRO_SYS_REGISTER  "register"
 #define PRO_SYS_TEXT_CODE  "text_code"
-
+#define PRO_SYS_START_APP  "start_app"
+#define PRO_SYS_STOP_APP	"stop_app"
 
 
 
@@ -15,7 +16,8 @@ extern int cgi_sys_auth_handler(connection_t *con);				//用户认证
 extern int cgi_sys_login_handler(connection_t *con);
 extern int cgi_sys_user_register_handler(connection_t *con); //用户注册
 extern int cgi_sys_text_code_handler(connection_t *con);
-
+extern int cgi_sys_start_app_handler(connection_t *con);   //开启程序
+extern int cgi_sys_stop_app_handler(connection_t *con);
 
 
 
@@ -25,6 +27,8 @@ static cgi_protocol_t pro_list[] ={
 	{PRO_SYS_LOGIN,cgi_sys_login_handler},
 	{PRO_SYS_REGISTER,cgi_sys_user_register_handler},
 	{PRO_SYS_TEXT_CODE,cgi_sys_text_code_handler},
+	{PRO_SYS_START_APP,cgi_sys_start_app_handler},
+	{PRO_SYS_STOP_APP,cgi_sys_stop_app_handler},
 	{NULL,NULL},
 };
 

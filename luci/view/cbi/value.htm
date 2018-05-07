@@ -1,0 +1,15 @@
+
+	
+	<div class="text-val" id="cbi-<%=self.config.."-"..section.."-"..self.option%>">
+		<div class="text-name"><%- if self.title and #self.title > 0 then -%><%-=self.title-%><%- end -%></div>
+		<div class="value-value">
+
+			<input class="textbox" type="<%=self.password and 'password" class="cbi-input-password' or 'text" class="cbi-input-text' %>" onchange="cbi_d_update(this.id)"<%=
+		attr("name", cbid) .. attr("id", cbid) .. attr("value", self:cfgvalue(section) or self.default) ..
+		ifattr(self.size, "size") .. ifattr(self.placeholder, "placeholder")
+	%>/>
+		</div>
+	</div>
+
+
+<%+cbi/full_valuefooter%>

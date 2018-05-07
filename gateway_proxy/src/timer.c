@@ -10,9 +10,11 @@ void timer_handler() {
 	util_timer *n = NULL;
 	list_for_each_entry_safe(p, n, &my_timer_list, list) {
 		if (cur >= p->expire) {
-			p->cb_func();
+			p->cb_func(p->para);
 			if (!p->loop) {
 				list_del(&p->list);
+				if (p->para)
+					free(p->para);
 				free(p);
 			}
 			else {
@@ -22,20 +24,30 @@ void timer_handler() {
 	}
 }
 
-util_timer *add_timer(int (*cb_func)(),int delay,int loop, int interval) {
+util_timer *add_timer(int (*cb_func)(),int delay,int loop, int interval, void *para, int type) {
 	util_timer *t = malloc(sizeof(util_timer));
 	t->cb_func = cb_func;
 	t->expire = uptime() + delay;
 	t->interval = interval;
 	t->loop = loop;
+	t->para = para;
+	t->timer_type = type;
 	list_add(&t->list, &my_timer_list);
 	return t;
 }
 
-int del_timer(util_timer *u)
+int del_timer(int type)
 {
-	list_del(&u->list);
-	free(u);
+	util_timer *p = NULL;
+	util_timer *n = NULL;
+	list_for_each_entry_safe(p, n, &my_timer_list, list) {
+		if (p->timer_type == type) {
+			list_del(&p->list);
+			if (p->para)
+				free(p->para);
+			free(p);
+		}			
+	}
 	return 0;
 }
 

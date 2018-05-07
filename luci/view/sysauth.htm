@@ -1,0 +1,98 @@
+<%#
+LuCI - Lua Configuration Interface
+Copyright 2008 Steven Barth <steven@midlink.org>
+Copyright 2008-2012 Jo-Philipp Wich <xm@subsignal.org>
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+-%>
+<html>
+<body style="width:device-width;overflow:hidden;text-align:center;background-color:#333">
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta http-equiv="Content-Script-Type" content="text/javascript" />
+<link rel="stylesheet" type="text/css" media="screen" href="<%=media%>/cascade.css" />
+<% if node and node.css then %><link rel="stylesheet" type="text/css" media="screen" href="<%=resource%>/<%=node.css%>" />
+<% end -%>
+<!--[if IE 6]><link rel="stylesheet" type="text/css" media="screen" href="<%=media%>/ie6.css" /><![endif]-->
+<!--[if IE 7]><link rel="stylesheet" type="text/css" media="screen" href="<%=media%>/ie7.css" /><![endif]-->
+<!--[if IE 8]><link rel="stylesheet" type="text/css" media="screen" href="<%=media%>/ie8.css" /><![endif]-->
+<script type="text/javascript" src="<%=resource%>/xhr.js"></script>
+<script type="text/javascript">
+if (top.location != self.location){
+alert("登陆已超时，请重新登陆")
+top.location=top.location;
+}
+
+</script>
+<form method="post" action="<%=pcdata(luci.http.getenv("REQUEST_URI"))%>">
+		<input type="hidden" name="username" value="<%=duser%>"/>
+		<div class="cbi-map-descr">
+			<%- if fuser then %>
+			<div class="error" style="color:#FFF;"><%:Invalid password! Please try again.%></div>
+			<br />
+			<% end -%>
+		</div>
+		<div style="width:300px; margin:100px auto 0px auto;">
+			<div><img src="<%=media%>/logo1.png" width="300px"/></div>
+			<div style="margin-top:50px; font-size:20px; color:#FFF;">欢迎使用建飞无线企业网关</div>
+			<div style="clear:both;"></div>
+			<div style="margin-top:50px;">
+				<input id="focus_password" class="cbi-input-password" type="text" style="width:200px; height: 40px; color:#000;" name="password" placeholder="在此输入用户密码"/>
+			</div><br/>
+			<div style="clear:both;"></div>
+			<div><input type="submit" value="<%:Login%>" style="width:200px; height:40px;border:0; font-size:20px;color:#fff; background-color:#0064cd"/></div>
+			<div style="clear:both;"></div>
+
+		</div>
+
+<!--		<fieldset class="cbi-section2">	
+				<div style="margin:auto;">
+					<input id="focus_password" class="cbi-input-password" type="password" style="width:130px; height: 26px;" name="password" />
+			</div>
+
+			<div>
+			<input type="submit" value="<%:Login%>" class="cbi-button cbi-button-apply1" />
+			</div>
+
+	   </fieldset>
+-->
+
+</form>
+<script type="text/javascript">//<![CDATA[
+	var input = document.getElementById('focus_password');
+	if (input)self.location
+		input.focus();
+//]]></script>
+
+<%
+local uci  = require "luci.model.uci".cursor()
+local fs  = require "nixio.fs"
+local https_key = uci:get("uhttpd", "main", "key")
+local https_port = uci:get("uhttpd", "main", "listen_https")
+if type(https_port) == "table" then
+	https_port = https_port[1]
+end
+
+if https_port and fs.access(https_key) then
+	https_port = https_port:match("(%d+)$")
+%>
+
+<script type="text/javascript">//<![CDATA[
+	if (document.location.protocol != 'https:') {
+		var url = 'https://' + window.location.hostname + ':' + '<%=https_port%>' + window.location.pathname;
+		var img=new Image;
+		img.onload=function(){window.location = url};
+		img.src='https://' + window.location.hostname + ':' + '<%=https_port%>' + '<%=resource%>/cbi/up.gif?' + Math.random();;
+		setTimeout(function(){
+			img.src=''
+		}, 5000);
+	}
+//]]></script>
+
+<% end %>
+</body>
+</html>

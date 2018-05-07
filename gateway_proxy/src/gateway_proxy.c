@@ -21,17 +21,6 @@
 
 #define MAX_JSON_LEN 2048
 
-#define TEXT_STR "您的服务码是：%06d【华数WIFI】"
-
-#define GMC_URL_HEART "http://192.168.1.81:8888/gateway/heartbeat"   
-//"http://192.168.20.1:81/cgi-bin/temp_cgi?opt=check_login"
-#define GMC_URL_RESULT "http://192.168.1.81:8888/gateway/taskResult"
-#define TOKEN_URL "http://192.168.1.160:2080/authentication/platform/token/2/"
-#define USER_QUERY_URL "http://192.168.1.160:2080/authentication/gateway/user/2/"
-#define USER_REGISTER_URL "http://192.168.1.160:2080/authentication/gateway/user/register/2/"
-#define TEXT_CODE_URL "http://192.168.1.5:2080/authentication/getAuthcode"
-
-
 #define PORTAL_FILE "/tmp/portal.tar.gz"
 #define SYSBIN_FILE "/tmp/openwrt-ramips-mt7621-mt7621-squashfs-sysupgrade.bin"
 
@@ -54,6 +43,7 @@ pthread_mutex_t text_mutex;
 pthread_mutex_t authing_mutex;
 static int heart_beat_interval = 60;
 static int queryuser_cache_time = 60;
+static int dropbear_time = 600;
 
 typedef struct portal_cfg_st{
     int32 apply;/*0:interface; 1:vlan*/
@@ -63,9 +53,6 @@ typedef struct portal_cfg_st{
     };
     int8 url[URL_SIZE];
 }portal_cfg_t;
-
-//char * http_post(const char *url,const char * post_str);  
-//extern cJSON *cJSON_Parse(const char *value);
 
 enum {
 	TASK_UPDATE_POTAL_HTML,
@@ -92,7 +79,13 @@ typedef struct gateway_info {
 	char v5_ip[20];
 	int date;
 	int uptime;
-	
+	char token_url[128];
+	char text_code_url[128];
+	char user_query_url[128];
+	char user_register_url[128];
+	char gmc_url_result[128];
+	char gmc_url_heart[128];
+	char text_str[128];
 }gateway_info_t;
 
 typedef struct advertising_cfg_st{
@@ -234,7 +227,7 @@ int get_token()
 
 	CURLcode res = CURLE_OK;
 	CURL *mycurl = curl_easy_init();
-	snprintf(temp_url, sizeof(temp_url) - 1, "%s%d", TOKEN_URL, gw_token.token_time);
+	snprintf(temp_url, sizeof(temp_url) - 1, "%s%d", gateway.token_url, gw_token.token_time);
 
 	if (!mycurl)
 		goto out;
@@ -270,7 +263,7 @@ out:
 	return ret;
 }
 
-int query_list_clear()
+int query_list_clear(void *para)
 {
 	user_query_info_t *p= NULL, *n = NULL;
 	pthread_mutex_lock(&query_mutex);
@@ -312,7 +305,7 @@ int32 user_query_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, in
 	
 	cJSON_AddNumberToObject(root, "userType", user_info->auth_type);
 
-	snprintf(url, sizeof(url) - 1, "%s%d/%s", USER_QUERY_URL, 
+	snprintf(url, sizeof(url) - 1, "%s%d/%s", gateway.user_query_url, 
 		gw_token.token_time, gw_token.token_val);
 
 	char *headers[2] = {user_info->user_agent, NULL};
@@ -400,7 +393,7 @@ int32 user_register_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	cJSON_AddStringToObject(root, "username", user_info->username);
 	cJSON_AddStringToObject(root, "password", user_info->password);
 
-	snprintf(url, sizeof(url) - 1, "%s%d/%s", USER_REGISTER_URL, 
+	snprintf(url, sizeof(url) - 1, "%s%d/%s", gateway.user_register_url, 
 		gw_token.token_time, gw_token.token_val);
 
 	if ((ret = http_send(url, root, &obj, NULL)))
@@ -449,7 +442,7 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	
 	verify_code = time(NULL); 
 	verify_code = verify_code%1000000;
-	snprintf(code_str, sizeof(code_str) - 1, TEXT_STR, verify_code);
+	snprintf(code_str, sizeof(code_str) - 1, gateway.text_str, verify_code);
 	cJSON_AddStringToObject(root, "msg", code_str);
 	
 	jstr = cJSON_PrintUnformatted(root);
@@ -464,7 +457,7 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	if (!mycurl)
 		goto out;
 	curl_easy_setopt(mycurl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(mycurl, CURLOPT_URL, TEXT_CODE_URL);
+	curl_easy_setopt(mycurl, CURLOPT_URL, gateway.text_code_url);
 	curl_easy_setopt(mycurl, CURLOPT_TIMEOUT, HTTP_TIMEOUT); 
 	curl_easy_setopt(mycurl, CURLOPT_WRITEFUNCTION, receive_data);
 	curl_easy_setopt(mycurl, CURLOPT_WRITEDATA, back_str);
@@ -520,6 +513,50 @@ out:
 	return ret;
 }
 
+int kill_app(void *para)
+{
+	char cmd[64] = {0};
+	if (para) {
+		snprintf(cmd, sizeof(cmd) - 1, "killall %s", para);
+		system(cmd);
+	}
+	return 0;
+}
+
+int32 start_app_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
+{
+	int ret = -1;
+	if (strcmp(ibuf, "dropbear") == 0) {
+		system("killall dropbear");
+		system("/usr/sbin/dropbear -F -P /var/run/dropbear.1.pid -p 22 -k 300 &");
+		char *para = strdup("dropbear");
+		if (para)
+			add_timer(kill_app, dropbear_time, 0, 10000, para, DROPBEAR_TIMER);
+		ret = 0;
+		*olen = 0;
+	} else {
+		*olen = 0;
+	}
+out:
+
+	return ret;
+}
+
+int32 stop_app_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
+{
+	int ret = -1;
+	if (strcmp(ibuf, "dropbear") == 0) {
+		system("killall dropbear");
+		del_timer(DROPBEAR_TIMER);
+		ret = 0;
+		*olen = 0;
+	} else {
+		*olen = 0;
+	}
+out:
+
+	return ret;
+}
 
 void sig_hander( int sig )  
 {  
@@ -644,7 +681,7 @@ int report_task(int id, int code,int result, char *msg) {
 	cJSON_AddItemToArray(task_arr, obj);
 
 	cJSON_AddItemToObject(root, "taskList",task_arr);
-	if ((ret = http_send(GMC_URL_RESULT, root, &obj, NULL)))
+	if ((ret = http_send(gateway.gmc_url_result, root, &obj, NULL)))
 		goto out;
 	
 out:
@@ -718,7 +755,7 @@ int do_task(cJSON *task_list)
 
 }
 
-int send_heart_beat()
+int send_heart_beat(void *para)
 {
 
 	int ret = -1, status = 0, w_pid = 0;
@@ -748,7 +785,7 @@ int send_heart_beat()
 	cJSON_AddNumberToObject(root, "date", gateway.date);
 	cJSON_AddNumberToObject(root, "uptime", gateway.uptime);
 	
-	if ((ret = http_send(GMC_URL_HEART, root, &obj, NULL)))
+	if ((ret = http_send(gateway.gmc_url_heart, root, &obj, NULL)))
 		goto out;
 
 	cJSON *result = cJSON_GetObjectItem(obj, "result");
@@ -783,6 +820,46 @@ int gateway_info_init()
 
 	if (!uuci_get("acct_config.gateway_base.queryuser_cache_time", &array, &num)) {
 		queryuser_cache_time = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+
+	if (!uuci_get("acct_config.gateway_base.dropbear_timeout", &array, &num)) {
+		dropbear_time = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+
+	if (!uuci_get("acct_config.gateway_base.gmc_url_heart", &array, &num)) {
+		strcpy(gateway.gmc_url_heart, array[0]);
+		uuci_get_free(array, num);
+	}
+
+	if (!uuci_get("acct_config.gateway_base.gmc_url_result", &array, &num)) {
+		strcpy(gateway.gmc_url_result, array[0]);
+		uuci_get_free(array, num);
+	}
+
+	if (!uuci_get("acct_config.gateway_base.token_url", &array, &num)) {
+		strcpy(gateway.token_url, array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.gateway_base.user_query_url", &array, &num)) {
+		strcpy(gateway.user_query_url, array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.gateway_base.user_register_url", &array, &num)) {
+		strcpy(gateway.user_register_url, array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.gateway_base.gmc_url_result", &array, &num)) {
+		strcpy(gateway.gmc_url_result, array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.gateway_base.text_code_url", &array, &num)) {
+		strcpy(gateway.text_code_url, array[0]);
+		uuci_get_free(array, num);
+	}
+	if (!uuci_get("acct_config.gateway_base.text_str", &array, &num)) {
+		strcpy(gateway.text_str, array[0]);
 		uuci_get_free(array, num);
 	}
 	
@@ -1154,6 +1231,8 @@ int main (int argc, char **argv)
 	msg_cmd_register(MSG_CMD_MANAGE_USER_QUERY, user_query_handler);
 	msg_cmd_register(MSG_CMD_MANAGE_USER_REGISTER, user_register_handler);
 	msg_cmd_register(MSG_CMD_MANAGE_TEXT_SEND, send_tel_code_handler);
+	msg_cmd_register(MSG_CMD_MANAGE_START_APP, start_app_handler);
+	msg_cmd_register(MSG_CMD_MANAGE_STOP_APP, stop_app_handler);
 	msg_dst_module_register_netlink(MODULE_AS);
 	msg_dst_module_register_unix(MODULE_RADIUS);
 	curl_global_init(CURL_GLOBAL_ALL);
@@ -1161,8 +1240,8 @@ int main (int argc, char **argv)
 	struct timeval tv;
 	fd_set fds;
 	int max_fd = 0;
-	add_timer(send_heart_beat, 2, 1, heart_beat_interval);
-	add_timer(query_list_clear, 2, 1, queryuser_cache_time);
+	add_timer(send_heart_beat, 2, 1, heart_beat_interval, NULL, 0);
+	add_timer(query_list_clear, 2, 1, queryuser_cache_time, NULL, 0);
 	portal_url_set();
 	black_white_list_add_send();
 	add_advertise();
