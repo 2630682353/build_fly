@@ -177,10 +177,10 @@ int acct_handler(user_query_info_t *u, int acct_type, char *session_id)
 
 	result = rc_acct(rh, 0, send);
 	if (result == OK_RC) {
-		printf("\"%s\" RADIUS acct OK \n", u->username);
+		AAA_LOG(LOG_INFO, "\"%s\" RADIUS acct OK \n", u->username);
 		ret = 0;
 	} else {
-		printf("\"%s\" RADIUS acct failure (RC=%i)  msg is %s\n", u->username, result, msg);
+		AAA_LOG(LOG_ERR, "\"%s\" RADIUS acct failure (RC=%i)  msg is %s\n", u->username, result, msg);
 		ret = 1;
 	}
 
@@ -215,7 +215,7 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	pthread_mutex_unlock(&auth_mutex);
 	//Fill in User-Name
 	strncpy(username_realm, u->username, sizeof(username_realm));
-		printf("uname %s pwd %s\n", u->username, u->password);
+	AAA_LOG(LOG_DEBUG, "auth uname %s pwd %s\n", u->username, u->password);
 	/* Append default realm */
 	if ((strchr(username_realm, '@') == NULL) && default_realm &&
 	    (*default_realm != '\0')) {
@@ -293,10 +293,8 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 		goto error;
 
 	result = rc_auth(rh, 0, send, &received, msg);
-	printf("send auth\n");
-	printf("mac:%s\n", u->mac);
 	if (result == OK_RC) {
-		printf("\"%s\" RADIUS Authentication OK \n", u->username);
+		AAA_LOG(LOG_INFO, "\"%s\" RADIUS Authentication OK \n", u->username);
 		
 		char session_id[64] = {0};
 		cal_session_id(session_id, sizeof(session_id), u);
@@ -314,12 +312,13 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 		auth_ok_u->ucfg.acct_policy = temp_config.acct_poli;
 		auth_ok_u->ucfg.total_flows = temp_config.tt_flows;
 		auth_ok_u->ucfg.ipaddr = inet_addr(u->user_ip);
+		auth_ok_u->ucfg.ipaddr = ntohl(auth_ok_u->ucfg.ipaddr);
 		
 		char *rcv_buf = NULL;
-		printf("send to as\n");
+		AAA_LOG(LOG_DEBUG, "authadd send to as\n");
 		if (msg_send_syn( MSG_CMD_AS_AUTHENTICATED_ADD,&auth_ok_u->ucfg,
 					sizeof(auth_ok_u->ucfg), &rcv_buf, &rlen) != 0) {
-			printf("MSG_CMD_AS_AUTHENTICATED_ADD err\n ");
+			AAA_LOG(LOG_ERR, "MSG_CMD_AS_AUTHENTICATED_ADD err\n ");
 			if (auth_ok_u)
 					free(auth_ok_u);
 			goto error;
@@ -328,9 +327,9 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 		pthread_mutex_lock(&auth_mutex);
 		list_add(&auth_ok_u->list, &auth_ok_list);
 		pthread_mutex_unlock(&auth_mutex);
-		printf("add to list\n");
-		AAA_LOG("%02x %02x %02x %02x %02x %02x, time:%d\n", auth_ok_u->ucfg.mac[0], auth_ok_u->ucfg.mac[1],
-				auth_ok_u->ucfg.mac[2], auth_ok_u->ucfg.mac[3], auth_ok_u->ucfg.mac[4], 
+		AAA_LOG(LOG_DEBUG, "adduser to authok list\n");
+		AAA_LOG(LOG_DEBUG, "auth info %02x %02x %02x %02x %02x %02x, time:%d\n", auth_ok_u->ucfg.mac[0], 
+			auth_ok_u->ucfg.mac[1], auth_ok_u->ucfg.mac[2], auth_ok_u->ucfg.mac[3], auth_ok_u->ucfg.mac[4], 
 				auth_ok_u->ucfg.mac[5],auth_ok_u->t);
 		if (rcv_buf)
 			free_rcv_buf(rcv_buf);
@@ -339,7 +338,7 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 		ret = 0;
 	}
 	else {
-		printf("\"%s\" RADIUS Authentication failure (RC=%i)  msg is %s\n", u->username, result, msg);
+		AAA_LOG(LOG_ERR, "\"%s\" RADIUS Authentication failure (RC=%i)  msg is %s\n", u->username, result, msg);
 		ret = ERR_CODE_AUTHFAIL;
 	}
 error:
@@ -360,7 +359,7 @@ int32 user_timeout(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	auth_ok_user_t *p;
 	auth_ok_user_t *n;
 	int matched = 0;
-	printf("have recv timeout %d\n", ilen);
+	AAA_LOG(LOG_INFO,"have recv timeout mac:%d\n", ilen);
 	pthread_mutex_lock(&auth_mutex);
 	list_for_each_entry_safe(p, n, &auth_ok_list, list) {
 		if (memcmp(p->ucfg.mac, ibuf, sizeof(p->ucfg.mac)) == 0) {
@@ -384,6 +383,15 @@ int32 user_timeout(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	return 0;
 }
 
+int32 log_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
+{
+	int ret = -1;
+	log_leveljf = *(int *)ibuf;
+	*olen = 0;
+	ret = 0;
+	return ret;
+}
+
 void sig_hander( int sig )  
 {  
 
@@ -401,9 +409,9 @@ int delete_mac()
 	u = list_first_entry(&auth_ok_list, auth_ok_user_t, list);
 	
 	if (&u->list != &auth_ok_list) {
-		printf("send delete to as\n");
+		AAA_LOG(LOG_DEBUG, "send delete to as\n");
 		if (msg_send_syn( MSG_CMD_AS_AUTHENTICATED_DELETE, u->ucfg.mac, sizeof(u->ucfg.mac), &rcv_buf, &rlen) != 0) {
-			printf("MSG_CMD_AS_AUTHENTICATED_DELETE err\n ");
+			AAA_LOG(LOG_ERR, "MSG_CMD_AS_AUTHENTICATED_DELETE err\n ");
 			
 		} else {
 			pthread_mutex_lock(&auth_mutex);
@@ -411,16 +419,8 @@ int delete_mac()
 			pthread_mutex_unlock(&auth_mutex);
 		}
 	} 
-//		else {
-//		char temp_mac[6] = {0};
-//		str2mac("78:a3:51:32:39:87", temp_mac);
-//		if (msg_send_syn( MSG_CMD_AS_AUTHENTICATED_DELETE, temp_mac, sizeof(temp_mac), &rcv_buf, &rlen) != 0)
-//			printf("MSG_CMD_AS_AUTHENTICATED_DELETE err\n ");
-//	}
-	printf("free before\n");
 	if (rcv_buf)
 		free_rcv_buf(rcv_buf);
-	printf("free after\n");
 
 }
 
@@ -429,6 +429,11 @@ void config_update()
 	char **array = NULL;
 	char *res;
 	int num = 0;
+
+	if (!uuci_get("gateway_config.gateway_base.radius_client_loglevel", &array, &num)) {
+		log_leveljf = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
 	if (!uuci_get("acct_config.acct_config.acct_policy", &array, &num)) {
 		temp_config.acct_poli = atoi(array[0]);
 		uuci_get_free(array, num);
@@ -523,6 +528,7 @@ int main(int argc, char **argv)
 	msg_init(MODULE_RADIUS);
 	msg_cmd_register(MSG_CMD_RADIUS_USER_AUTH, auth_handler);
 	msg_cmd_register(MSG_CMD_RADIUS_AUTH_TIMEOUT, user_timeout);
+	msg_cmd_register(MSG_CMD_RADIUS_LOG, log_handler);
 	msg_dst_module_register_netlink(MODULE_AS);
 	
 //	timer_list_init(1, sig_hander);

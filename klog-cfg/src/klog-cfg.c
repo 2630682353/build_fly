@@ -1,4 +1,4 @@
-#include "log.h"
+#include "klog.h"
 #include <sys/ioctl.h>
 #include <strings.h>
 #include <stdio.h>

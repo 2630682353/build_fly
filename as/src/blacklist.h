@@ -37,8 +37,7 @@ blacklist_t *blacklist_get(blacklist_t *black);
 void blacklist_put(blacklist_t *black);
 blacklist_t *blacklist_search(const void *mac);
 int32 blacklist_uplink_skb_check(struct sk_buff *skb);
-int32 blacklist_downlink_skb_check(struct sk_buff *skb,
-                                   const uint8 *hw_dest);
+int32 blacklist_downlink_skb_check(struct sk_buff *skb);
 int32 blacklist_proc_init(struct proc_dir_entry *parent);
 void blacklist_proc_destroy(struct proc_dir_entry *parent);
 

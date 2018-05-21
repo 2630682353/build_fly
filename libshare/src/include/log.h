@@ -15,23 +15,34 @@ extern "C" {
 #define GATEWAY_LOG_PATH "/tmp/gateway_log"
 
 
-#define IPC_LOG(fmt,args...) do{ \
-    my_log(IPC_LOG_PATH, "[IPC:%05d,%d]:"fmt, __LINE__, getpid(), ##args); \
+enum log_enum{
+	LOG_ERR = 1,
+	LOG_WARNING = 2,
+	LOG_INFO = 3,
+	LOG_DEBUG = 4
+};
+
+
+extern char *log_array[];
+extern unsigned int log_leveljf;
+
+#define IPC_LOG(logl,fmt,args...) do{ \
+    my_log(logl,IPC_LOG_PATH, "[IPC:%05d,%d,%s]:"fmt, __LINE__, getpid(), log_array[logl - 1], ##args); \
 }while(0)
 
-#define CGI_LOG(fmt,args...) do{ \
-    my_log(CGI_LOG_PATH, "[CGI:%05d,%d]:"fmt, __LINE__, getpid(), ##args); \
+#define CGI_LOG(logl,fmt,args...) do{ \
+    my_log(logl,CGI_LOG_PATH, "[CGI:%05d,%d,%s]:"fmt, __LINE__, getpid(), log_array[logl - 1], ##args); \
 }while(0)
 
-#define AAA_LOG(fmt,args...) do{ \
-    my_log(AAA_LOG_PATH, "[AAA:%05d,%d]:"fmt, __LINE__, getpid(), ##args); \
+#define AAA_LOG(logl,fmt,args...) do{ \
+    my_log(logl,AAA_LOG_PATH, "[AAA:%05d,%d,%s]:"fmt, __LINE__, getpid(), log_array[logl - 1], ##args); \
 }while(0)
 
-#define GATEWAY_LOG(fmt,args...) do{ \
-    my_log(GATEWAY_LOG_PATH, "[AAA:%05d,%d]:"fmt, __LINE__, getpid(), ##args); \
+#define GATEWAY_LOG(logl,fmt,args...) do{ \
+    my_log(logl,GATEWAY_LOG_PATH, "[gateway:%05d,%d,%s]:"fmt, __LINE__, getpid(), log_array[logl - 1], ##args); \
 }while(0)
 
-extern void my_log(char *file, const char *fmt, ...);
+extern void my_log(int logl, char *file, const char *fmt, ...);
 
 #ifdef  __cplusplus
 }

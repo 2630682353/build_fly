@@ -40,18 +40,12 @@ top.location=top.location;
         </div>
 <form method="post" action="<%=pcdata(luci.http.getenv("REQUEST_URI"))%>">
 		<input type="hidden" name="username" value="<%=duser%>"/>
-		<div class="cbi-map-descr">
-			<%- if fuser then %>
-			<div class="error" style="color:#000;"><%:Invalid password! Please try again.%></div>
-			<br />
-			<% end -%>
-		</div>
 
 		 <!-- 设置过密码的主页面 -->        
         <div class="wrap">
             <div class="content">
                 <div class="img-box"><a href="http://www.aviup.com/" target="_blank"><div class="index_logo"></div></a></div>
-                <p class="index_text">欢迎使用建飞无线企业网关</p>
+                <p class="index_text">欢迎使用建飞无限企业网关</p>
                 <div class="con">
                     <ul class="list">
                         <li>
@@ -62,6 +56,12 @@ top.location=top.location;
                             </span>
                         </li>
                     </ul>
+            		<div class="cbi-map-descr" style='width: 300px;margin-left: 150px;'>
+						<%- if fuser then %>
+						<div class="error" style="color:red;">密码错误！请重试</div>
+						<br />
+						<% end -%>
+					</div>
                     <div class="sb" style="margin-top:10px;">
                        <input type="submit" style="border:none" value="<%:Login%>"/>
                     </div>

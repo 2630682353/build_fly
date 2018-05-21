@@ -6,65 +6,17 @@
 #include "log.h"
 #include "protocol.h"
 #include "connection.h"
+#include    "uci_fn.h"
 
-/*
-typedef struct user_info
+int cgi_init()
 {
-	char name[20];		//字符串
-	char pwd[20];		//字符串
-	unsigned char mac[6];
-}user_info_t;
-
-int auth_handle(user_info_t *user)
-{
-	int temp_fd = 0, len = 0, ret = -1;
-	char file_temp[20] = {0};
-	msg_t *snd_msg = NULL;
-	msg_t *rcv_msg = NULL;
-	socket_t *temp_sock = NULL;
-	int8 *rcv_buf = NULL;
-	strcpy(file_temp, "/tmp/test.XXXXXX");
-	snd_msg = malloc(sizeof(msg_t));
-	
-	snd_msg->cmd = RADIUS_AUTH;
-	snd_msg->dmid = MODULE_GET(RADIUS_AUTH);
-	snd_msg->dlen = sizeof(user_info_t);
-	if ((temp_fd = mkstemp(file_temp)) < 0) {
-		CGI_LOG("mktemp error");
-		goto out;
+	char **array = NULL;
+	int num = 0;
+	if (!uuci_get("gateway_config.gateway_base.portal_cgi_loglevel", &array, &num)) {
+		log_leveljf = atoi(array[0]);
+		uuci_get_free(array, num);
 	}
-	temp_sock = unix_sock_init(file_temp);
-	
-	sock_addr_u dst_addr;
-	dst_addr.un_addr.sun_family = AF_UNIX;
-	memset(dst_addr.un_addr.sun_path, 0, sizeof(dst_addr.un_addr.sun_path));
-	strncpy(dst_addr.un_addr.sun_path, "/tmp/radius_rcv", sizeof(dst_addr.un_addr.sun_path)-1);
-	if (!temp_sock)
-		goto out;
-	len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), user, sizeof(user_info_t), &dst_addr);
-	
-	if (len <= 0)
-	goto out;
-	rcv_buf = malloc(2048);
-	len = sock_recvfrom(temp_sock, rcv_buf, 2048, NULL);
-	if (len <= 0)
-		goto out;
-	rcv_msg = rcv_buf;
-	ret = rcv_msg->result;
-
-out:
-	if (temp_fd > 0)
-		close(temp_fd);
-	if (snd_msg)
-		free(snd_msg);
-	if (temp_sock) 
-		sock_delete(temp_sock);
-	if (rcv_buf) {
-		free(rcv_buf);
-	}
-	return ret;
 }
-*/
 
 int main()
 {
@@ -103,6 +55,7 @@ reply_print:
 	if (out)
 		free(out);
 */
+	cgi_init();
 	connection_t con;
 	connection_init(&con);
 	connection_handel(&con);

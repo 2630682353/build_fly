@@ -8,9 +8,10 @@
 #include "debug.h"
 #include "http.h"
 #include "config.h"
-#include "log.h"
+#include "klog.h"
 #include "vlan.h"
 #include "portal.h"
+#include "dpi-hook.h"
 
 #include <linux/delay.h>
 #include <linux/kthread.h>
@@ -230,7 +231,7 @@ int32 authenticated_init(const uint32 maxcount)
     }
 
     spinlock_init(&s_spinlock_list_auth_keepalive);
-
+#ifdef HTTP_REDIRECT_KTHREAD
     if (0 != http_init(maxcount))
     {
         DB_ERR("http_init() call fail.");
@@ -244,12 +245,14 @@ int32 authenticated_init(const uint32 maxcount)
         sp_htab_auth = NULL;
         return -1;
     }
-    
+#endif
     sp_kthd_auth = kthread_run(authenticated_burned_check_func, NULL, "kthd-auth");
     if (unlikely(NULL == sp_kthd_auth))
     {
         DB_ERR("kthread_run() call fail.");
+#ifdef HTTP_REDIRECT_KTHREAD
         http_destroy();
+#endif
         spinlock_destroy(&s_spinlock_list_auth_keepalive);
         memcache_destroy(sp_cache_data);
         sp_cache_data = NULL;
@@ -266,7 +269,9 @@ int32 authenticated_init(const uint32 maxcount)
 void authenticated_destroy(void)
 {
     kthread_stop(sp_kthd_auth);
+#ifdef HTTP_REDIRECT_KTHREAD
     http_destroy();
+#endif
     rwlock_wrlock_bh(&s_rwlock_htab_auth);
     hashtab_destroy(sp_htab_auth);
     sp_htab_auth = NULL;
@@ -571,6 +576,7 @@ int32 authenticated_uplink_skb_check(struct sk_buff *skb)
             DB_WAR("authenticated_uplink_skb_update() checked, and drop it.");
             goto out;
         }
+        dpi_hook(skb, DPI_HOOK_AUTHENTICATED, DPI_DIRECTION_UPLINK);
     }
     ret = ND_ACCEPT;
 out:
@@ -629,13 +635,13 @@ out:
     return ret;
 }
 
-int32 authenticated_downlink_skb_check(struct sk_buff *skb,
-                                       const uint8 *hw_dest)
+int32 authenticated_downlink_skb_check(struct sk_buff *skb)
 {
-    int32 ret = NF_DROP;
+    int32 ret = ND_ACCEPT;
+    struct ethhdr *ethh = eth_hdr(skb);
     authenticated_t *auth = NULL;
 
-    auth = authenticated_search(hw_dest);
+    auth = authenticated_search(ethh->h_dest);
     if (unlikely(NULL == auth))
         goto out;
     else
@@ -643,10 +649,12 @@ int32 authenticated_downlink_skb_check(struct sk_buff *skb,
         if (unlikely(0 != authenticated_downlink_skb_update(auth, skb)))
         {
             DB_WAR("authenticated_downlink_skb_update() checked, and drop it.");
+            ret = ND_DROP;
             goto out;
         }
+        dpi_hook(skb, DPI_HOOK_AUTHENTICATED, DPI_DIRECTION_DOWNLINK);
     }
-    ret = NF_ACCEPT;
+    
 out:
     if (unlikely(NULL != auth))
         authenticated_put(auth);

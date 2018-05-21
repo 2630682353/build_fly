@@ -1,0 +1,19 @@
+config gateway_base gateway_base
+	option gateway_proxy_loglevel 1
+	option radius_client_loglevel 1
+	option portal_cgi_loglevel    1
+	option heartbeat_interval 60
+	option queryuser_cache_time 60
+	option dropbear_timeout  600
+	option gmc_url_heart    http://192.168.1.81:8888/gateway/heartbeat
+	option gmc_url_result   http://192.168.1.81:8888/gateway/taskResult
+	option token_url        http://192.168.1.160:2080/authentication/platform/token/2/
+	option user_query_url	http://192.168.1.160:2080/authentication/gateway/user/2/
+	option user_register_url  http://192.168.1.160:2080/authentication/gateway/user/register/2/
+	option text_code_url    http://192.168.1.5:2080/authentication/getAuthcode
+	option text_str			"您的服务码是：%06d【华数WIFI】"
+
+config gateway_sys  gateway_sys
+	option hard_version '1.0'
+	option soft_version '1.0'
+	option vendor 'zbt'

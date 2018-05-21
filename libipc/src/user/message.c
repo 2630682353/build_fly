@@ -25,7 +25,6 @@ static int16 s_module_id = 0;
 static int16 msg_sn = 0;
 static pthread_mutex_t sn_mutex;
 
-
 /*数据包信息结构体,用在queue_item_t的arg中传递收/发的数据包*/
 typedef struct msg_pkt_st{
     sock_addr_u paddr;  /*peer address information*/

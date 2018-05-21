@@ -19,9 +19,9 @@
 		
 	
 	
-		local hostname=uci:get("system","system[0]","hostname")
-		local hard_version=uci:get_first("system","system","hard_version")
-		local firmware_version=uci:get_first("system","system","soft_version")
+		local hostname=uci:get("gateway_config","gateway_sys","hostname")
+		local hard_version=uci:get_first("gateway_config","gateway_sys","hard_version")
+		local firmware_version=uci:get_first("gateway_config","gateway_sys","soft_version")
 		
 
 		local netlist = { }

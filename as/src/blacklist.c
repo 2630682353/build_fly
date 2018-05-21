@@ -4,7 +4,8 @@
 #include "debug.h"
 #include "rwlock.h"
 #include "atomic.h"
-#include "log.h"
+#include "klog.h"
+#include "dpi-hook.h"
 
 #include <linux/proc_fs.h>
 #include <linux/netdevice.h>
@@ -266,6 +267,7 @@ int32 blacklist_uplink_skb_check(struct sk_buff *skb)
         blacklist_uplink_update(black);
         ret = ND_DROP;
         blacklist_put(black);
+        dpi_hook(skb, DPI_HOOK_BLACKLIST, DPI_DIRECTION_UPLINK);
     }
     return ret;
 }
@@ -278,18 +280,19 @@ static inline int32 blacklist_downlink_update(blacklist_t *black)
     return 0;
 }
 
-int32 blacklist_downlink_skb_check(struct sk_buff *skb,
-                                   const uint8 *hw_dest)
+int32 blacklist_downlink_skb_check(struct sk_buff *skb)
 {
-    int32 ret = NF_ACCEPT;
+    int32 ret = ND_ACCEPT;
+    struct ethhdr *ethh = eth_hdr(skb);
     blacklist_t *black = NULL;
 
-    black = blacklist_search(hw_dest);
+    black = blacklist_search(ethh->h_dest);
     if (NULL != black)
     {
         blacklist_downlink_update(black);
-        ret = NF_DROP;
+        ret = ND_DROP;
         blacklist_put(black);
+        dpi_hook(skb, DPI_HOOK_BLACKLIST, DPI_DIRECTION_DOWNLINK);
     }
     return ret;
 }

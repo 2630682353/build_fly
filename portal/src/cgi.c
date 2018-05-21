@@ -82,7 +82,7 @@ int cgi_snd_msg(int cmd, void *snd, int snd_len, void **rcv, int *rcv_len)
 	snd_msg->dmid = MODULE_GET(cmd);
 	snd_msg->dlen = snd_len;
 	if ((temp_fd = mkstemp(file_temp)) < 0) {
-		CGI_LOG("mktemp error");
+		CGI_LOG(LOG_ERR, "mktemp sock error\n");
 		goto out;
 	}
 	temp_sock = unix_sock_init(file_temp);
@@ -138,7 +138,6 @@ int cgi_sys_auth_handler(connection_t *con)
 	char *mac = con_value_get(con,"mac");
 	char *vlan = con_value_get(con,"vlan");
 	char *user_ip = con_value_get(con, "user_ip");
-	CGI_LOG("name: %s, pwd: %s, msc: %s\n", name, pwd, mac);
 	user_query_info_t user;
 	memset(&user, 0, sizeof(user));
 	if (!name || !pwd || !mac || !vlan || !user_ip) {
@@ -168,7 +167,6 @@ int cgi_sys_login_handler(connection_t *con)
 {
 	char *mac = con_value_get(con,"mac");
 	char *ip = con_value_get(con,"ip");
-	CGI_LOG("mac: %s\n", mac);
 	user_info_t user= {{0}, {0}, {0}, 0};
 	struct in_addr user_ip;
 	user_ip.s_addr = inet_addr(ip);
@@ -282,7 +280,7 @@ int cgi_sys_user_register_handler(connection_t *con)
 	char *mac = con_value_get(con,"mac");
 	char *vlan = con_value_get(con,"vlan");
 	char *user_ip = con_value_get(con, "user_ip");
-	CGI_LOG("name: %s, pwd: %s, msc: %s\n", name, pwd, mac);
+	CGI_LOG(LOG_DEBUG, "new user register come name: %s, pwd: %s, msc: %s\n", name, pwd, mac);
 	user_query_info_t user;
 	memset(&user, 0, sizeof(user));
 	user.auth_type = 1;

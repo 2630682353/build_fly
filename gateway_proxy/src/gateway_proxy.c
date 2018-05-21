@@ -10,6 +10,7 @@
 #include    "uci_fn.h"
 #include    "tools.h"
 #include    "cpu.h"
+#include    "dpi.h"
 #include <errno.h>
 #include <fcntl.h>
 #include "timer.h"
@@ -138,7 +139,6 @@ size_t receive_data(void *buffer, size_t size, size_t nmemb, void *receive_buf) 
     return rlen;
 }
 
-
 int http_send(char *url, cJSON *send, cJSON **recv, char *http_headers[])
 {
 	int ret = -1;
@@ -178,16 +178,16 @@ int http_send(char *url, cJSON *send, cJSON **recv, char *http_headers[])
 		snprintf(header_str, sizeof(header_str) - 1, "Content-Type:application/json");
 		headers = curl_slist_append(headers, header_str); 
 		jstr = cJSON_PrintUnformatted(send); 
-		printf("http send %s\n", jstr);
+		GATEWAY_LOG(LOG_DEBUG, "http send %s\n", jstr);
 		curl_easy_setopt(mycurl, CURLOPT_HTTPHEADER, headers); 
 		curl_easy_setopt(mycurl, CURLOPT_POSTFIELDS, jstr); 
 		res = curl_easy_perform(mycurl);
 	}
 	if (res != CURLE_OK) {
-		printf("curl_easy_perform() failed: %d\n", res);
+		GATEWAY_LOG(LOG_WARNING, "curl_easy_perform() failed: %d\n", res);
 		goto out;
     }
-	printf("http recv %s\n", back_str);
+	GATEWAY_LOG(LOG_DEBUG, "http recv %s\n", back_str);
 	obj = cJSON_Parse(back_str);
 	if (!obj)
 		goto out;
@@ -238,10 +238,10 @@ int get_token()
 	res = curl_easy_perform(mycurl);
 
 	if (res != CURLE_OK) {
-		printf("get tocken curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		GATEWAY_LOG(LOG_ERR, "get tocken curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
 		goto out;
     }
-	printf("token back: %s\n", back_str);
+	GATEWAY_LOG(LOG_DEBUG, "token back: %s\n", back_str);
 	obj = cJSON_Parse(back_str);
 	if (!obj)
 		goto out;
@@ -268,7 +268,6 @@ int query_list_clear(void *para)
 	user_query_info_t *p= NULL, *n = NULL;
 	pthread_mutex_lock(&query_mutex);
 	list_for_each_entry_safe(p, n, &query_user_list, user_list) {
-		printf("q del\n");
 		list_del(&p->user_list);
 		free(p);
 	}
@@ -446,7 +445,7 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	cJSON_AddStringToObject(root, "msg", code_str);
 	
 	jstr = cJSON_PrintUnformatted(root);
-	printf("http send %s\n", jstr);
+	GATEWAY_LOG(LOG_DEBUG, "http send %s\n", jstr);
 	back_str = (char*)malloc(4096);
 	memset(back_str, 0, 4096);
 	
@@ -465,11 +464,11 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	res = curl_easy_perform(mycurl);
 
 	if (res != CURLE_OK) {
-		printf("send txtcode curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		GATEWAY_LOG(LOG_ERR, "send txtcode curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
 		goto out;
     }
 	
-	printf("http recv %s\n", back_str);
+	GATEWAY_LOG(LOG_INFO, "http recv %s\n", back_str);
 	obj = cJSON_Parse(back_str);
 
 	cJSON *code = cJSON_GetObjectItem(obj, "code");
@@ -521,6 +520,15 @@ int kill_app(void *para)
 		system(cmd);
 	}
 	return 0;
+}
+
+int32 log_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
+{
+	int ret = -1;
+	log_leveljf = *(int *)ibuf;
+	*olen = 0;
+	ret = 0;
+	return ret;
 }
 
 int32 start_app_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *olen)
@@ -588,14 +596,14 @@ int portal_wget(int id, int code, char *md5, char *url)
 	if (i > 3)
 		goto err;
 	if (igd_md5sum(PORTAL_FILE, temp_md5)) {
-		GATEWAY_LOG("%s calc md5 fail\n", PORTAL_FILE);
+		GATEWAY_LOG(LOG_ERR, "%s calc md5 fail\n", PORTAL_FILE);
 		goto err;
 	}
 
 	for (i = 0; i < 16; i++)
 		sprintf(&cmd[i*2], "%02X", temp_md5[i]);
 	if (strncasecmp(cmd, md5, 32)) {
-			GATEWAY_LOG("MD5ERR:\n%s\n%s\n", cmd, md5);
+			GATEWAY_LOG(LOG_ERR, "MD5ERR:\n%s\n%s\n", cmd, md5);
 			strncpy(push_msg, "md5 check err", sizeof(push_msg) - 1);
 			goto err;
 	}
@@ -638,14 +646,14 @@ int sysbin_wget(int id, int code, char *md5, char *url)
 	if (i > 3)
 		goto err;
 	if (igd_md5sum(SYSBIN_FILE, temp_md5)) {
-		GATEWAY_LOG("%s calc md5 fail\n", PORTAL_FILE);
+		GATEWAY_LOG(LOG_ERR, "%s calc md5 fail\n", PORTAL_FILE);
 		goto err;
 	}
 
 	for (i = 0; i < 16; i++)
 		sprintf(&cmd[i*2], "%02X", temp_md5[i]);
 	if (strncasecmp(cmd, md5, 32)) {
-			GATEWAY_LOG("MD5ERR:\n%s\n%s\n", cmd, md5);
+			GATEWAY_LOG(LOG_ERR, "MD5ERR:\n%s\n%s\n", cmd, md5);
 			strncpy(push_msg, "md5 check err", sizeof(push_msg) - 1);
 			goto err;
 	}
@@ -694,7 +702,6 @@ out:
 
 int do_task(cJSON *task_list)
 {
-	printf("do_task\n");
 	cJSON *child_item = task_list->child;
 	cJSON *task_id = NULL, *task_code = NULL, *task_para = NULL,
 			*md5_code = NULL;
@@ -713,18 +720,18 @@ int do_task(cJSON *task_list)
 				
 				report_task(task_id->valueint, task_code->valueint, 0, NULL);
 				rlen = shell_printf("reboot", bask_str, 4096);
-				printf("task reboot\n");
+				GATEWAY_LOG(LOG_INFO, "task reboot\n");
 				break;
 			case TASK_PORTAL_HTML_UPDATE:
 				task_para = cJSON_GetObjectItem(child_item, "taskParam");
 				if (!task_para) {
-					printf("no param\n");
+					GATEWAY_LOG(LOG_ERR, "task no param\n");
 					break;
 				}
 				download_url = cJSON_GetObjectItem(task_para, "url");
 				md5_code = cJSON_GetObjectItem(task_para, "md5Code");
 				if (!download_url || !md5_code) {
-					printf("no url, or no md5 code");
+					GATEWAY_LOG(LOG_ERR, "no url, or no md5 code");
 					break;
 				}			
 				portal_wget(task_id->valueint, task_code->valueint, md5_code->valuestring, download_url->valuestring);
@@ -732,13 +739,13 @@ int do_task(cJSON *task_list)
 			case TASK_SYSTEM_UPGRADE:
 				task_para = cJSON_GetObjectItem(child_item, "taskParam");
 				if (!task_para) {
-					printf("no param\n");
+					GATEWAY_LOG(LOG_ERR, "task no param\n");
 					break;
 				}
 				download_url = cJSON_GetObjectItem(task_para, "url");
 				md5_code = cJSON_GetObjectItem(task_para, "md5Code");
 				if (!download_url || !md5_code) {
-					printf("no url, or no md5 code");
+					GATEWAY_LOG(LOG_ERR, "no url, or no md5 code");
 					break;
 				}			
 				sysbin_wget(task_id->valueint, task_code->valueint, md5_code->valuestring, download_url->valuestring);
@@ -765,11 +772,8 @@ int send_heart_beat(void *para)
 	gateway_info_update();
 	
 	w_pid = waitpid(-1, &status, WNOHANG);
-//	printf("wait pid hhhhhhhhhhhhhhhhhhhhhhhhhhhh = %d\n", w_pid);
+
 	root = cJSON_CreateObject();
-	
-//	cJSON_AddStringToObject(root, "stage", "heartbeat");
-//	cJSON_AddStringToObject(root, "devMac", gateway.mac);
 	
 	cJSON_AddStringToObject(root, "hardVersion", gateway.hard_version);
 	cJSON_AddStringToObject(root, "softVersion", gateway.soft_version);
@@ -813,52 +817,57 @@ int gateway_info_init()
 	time_t rawtime;
 	struct sysinfo info;
 
-	if (!uuci_get("acct_config.gateway_base.heartbeat_interval", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.gateway_proxy_loglevel", &array, &num)) {
+		log_leveljf = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+
+	if (!uuci_get("gateway_config.gateway_base.heartbeat_interval", &array, &num)) {
 		heart_beat_interval = atoi(array[0]);
 		uuci_get_free(array, num);
 	}
 
-	if (!uuci_get("acct_config.gateway_base.queryuser_cache_time", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.queryuser_cache_time", &array, &num)) {
 		queryuser_cache_time = atoi(array[0]);
 		uuci_get_free(array, num);
 	}
 
-	if (!uuci_get("acct_config.gateway_base.dropbear_timeout", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.dropbear_timeout", &array, &num)) {
 		dropbear_time = atoi(array[0]);
 		uuci_get_free(array, num);
 	}
 
-	if (!uuci_get("acct_config.gateway_base.gmc_url_heart", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.gmc_url_heart", &array, &num)) {
 		strcpy(gateway.gmc_url_heart, array[0]);
 		uuci_get_free(array, num);
 	}
 
-	if (!uuci_get("acct_config.gateway_base.gmc_url_result", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.gmc_url_result", &array, &num)) {
 		strcpy(gateway.gmc_url_result, array[0]);
 		uuci_get_free(array, num);
 	}
 
-	if (!uuci_get("acct_config.gateway_base.token_url", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.token_url", &array, &num)) {
 		strcpy(gateway.token_url, array[0]);
 		uuci_get_free(array, num);
 	}
-	if (!uuci_get("acct_config.gateway_base.user_query_url", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.user_query_url", &array, &num)) {
 		strcpy(gateway.user_query_url, array[0]);
 		uuci_get_free(array, num);
 	}
-	if (!uuci_get("acct_config.gateway_base.user_register_url", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.user_register_url", &array, &num)) {
 		strcpy(gateway.user_register_url, array[0]);
 		uuci_get_free(array, num);
 	}
-	if (!uuci_get("acct_config.gateway_base.gmc_url_result", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.gmc_url_result", &array, &num)) {
 		strcpy(gateway.gmc_url_result, array[0]);
 		uuci_get_free(array, num);
 	}
-	if (!uuci_get("acct_config.gateway_base.text_code_url", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.text_code_url", &array, &num)) {
 		strcpy(gateway.text_code_url, array[0]);
 		uuci_get_free(array, num);
 	}
-	if (!uuci_get("acct_config.gateway_base.text_str", &array, &num)) {
+	if (!uuci_get("gateway_config.gateway_base.text_str", &array, &num)) {
 		strcpy(gateway.text_str, array[0]);
 		uuci_get_free(array, num);
 	}
@@ -975,9 +984,9 @@ void black_white_list_add_send()
 		for(i = 0; i < num; i++) {
 			str2mac(array[i], black_white_mac);
 			if (msg_send_syn( MSG_CMD_AS_BLACKLIST_ADD, black_white_mac, sizeof(black_white_mac), NULL, NULL) != 0) {
-			printf("MSG_CMD_AS_BLACKLIST_ADD err\n ");
+			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_BLACKLIST_ADD err\n ");
 			}else {
-				printf("black add success\n");
+				GATEWAY_LOG(LOG_INFO, "black add success\n");
 			}
 		}
 		uuci_get_free(array, num);
@@ -986,9 +995,9 @@ void black_white_list_add_send()
 		for(i = 0; i < num; i++) {
 			str2mac(array[i], black_white_mac);
 			if (msg_send_syn( MSG_CMD_AS_WHITELIST_ADD, black_white_mac, sizeof(black_white_mac), NULL, NULL) != 0) {
-			printf("MSG_CMD_AS_WhiteLIST_ADD err\n ");
+			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_WhiteLIST_ADD err\n ");
 			}else {
-				printf("white add success\n");
+				GATEWAY_LOG(LOG_INFO, "white add success\n");
 			}
 		}
 		uuci_get_free(array, num);
@@ -1040,9 +1049,9 @@ void add_advertise()
 				uuci_get_free(array, num);
 			}
 			if (msg_send_syn( MSG_CMD_AS_ADVERTISING_ADD, &temp_adv, sizeof(advertising_cfg_t), NULL, NULL) != 0) {
-				printf("MSG_CMD_AS_ADVERTISING_ADD err\n ");
+				GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_ADVERTISING_ADD err\n ");
 			}else {
-				printf("adv add success\n");
+				GATEWAY_LOG(LOG_INFO, "adv add success\n");
 			}
 		}
 	}
@@ -1064,9 +1073,9 @@ void delete_advertise()
 	}
 	
 	if (msg_send_syn( MSG_CMD_AS_ADVERTISING_DELETE, temp_adv2, sizeof(advertising_cfg_t) * tp_size, NULL, NULL) != 0) {
-			printf("MSG_CMD_AS_ADVERTISING_DELETE err\n ");
+			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_ADVERTISING_DELETE err\n ");
 		}else {
-			printf("adv delete success\n");
+			GATEWAY_LOG(LOG_INFO, "adv delete success\n");
 			}
 	free(temp_adv2);
 }
@@ -1115,9 +1124,9 @@ void set_adv_policy()
 	}
 
 	if (msg_send_syn( MSG_CMD_AS_ADVERTISING_POLICY_SET, &temp_policy, sizeof(temp_policy), NULL, NULL) != 0) {
-			printf("MSG_CMD_AS_ADVERTISING_POLICY_SET err\n ");
+			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_ADVERTISING_POLICY_SET err\n ");
 		}else {
-			printf("adv_policy set success\n");
+			GATEWAY_LOG(LOG_INFO, "adv_policy set success\n");
 		}
 }
 
@@ -1126,9 +1135,9 @@ void query_adv_policy()
 	int policy_size = 0;
 	advertising_policy_t *res_policy = NULL;
 	if (msg_send_syn( MSG_CMD_AS_ADVERTISING_POLICY_QUERY, NULL, 0, &res_policy, &policy_size) != 0) {
-			printf("MSG_CMD_AS_ADVERTISING_POLICY_QUERY err\n ");
+			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_ADVERTISING_POLICY_QUERY err\n ");
 	}else {
-			printf("policy query success policy_oprion = %d\n", res_policy->option);
+			GATEWAY_LOG(LOG_INFO, "policy query success policy_oprion = %d\n", res_policy->option);
 			free_rcv_buf(res_policy);
 			
 	}
@@ -1142,9 +1151,9 @@ int portal_url_set()
 	snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.lan_ip);
 	
 	if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
-		printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+		GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_PORTAL_URL_SET err\n ");
 	}else {
-		printf("MSG_CMD_AS_PORTAL_URL_SET success \n");
+		GATEWAY_LOG(LOG_INFO, "MSG_CMD_AS_PORTAL_URL_SET success \n");
 	}
 	if (gateway.v3_ip[0] != '\0') {
 		portal.apply = 1;
@@ -1152,9 +1161,9 @@ int portal_url_set()
 		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v3_ip);
 		
 		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
-			printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_PORTAL_URL_SET err\n ");
 		}else {
-			printf("MSG_CMD_AS_PORTAL_URL_SET V3 success \n");
+			GATEWAY_LOG(LOG_INFO, "MSG_CMD_AS_PORTAL_URL_SET V3 success \n");
 		}
 	}
 	if (gateway.v4_ip[0] != '\0') {
@@ -1163,9 +1172,9 @@ int portal_url_set()
 		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v4_ip);
 		
 		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
-			printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_PORTAL_URL_SET err\n ");
 		}else {
-			printf("MSG_CMD_AS_PORTAL_URL_SET V4  success \n");
+			GATEWAY_LOG(LOG_INFO, "MSG_CMD_AS_PORTAL_URL_SET V4  success \n");
 		}
 	} 
 	if (gateway.v5_ip[0] != '\0') {
@@ -1174,9 +1183,9 @@ int portal_url_set()
 		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v5_ip);
 		
 		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
-			printf("MSG_CMD_AS_PORTAL_URL_SET err\n ");
+			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_PORTAL_URL_SET err\n ");
 		}else {
-			printf("MSG_CMD_AS_PORTAL_URL_SET V5 success \n");
+			GATEWAY_LOG(LOG_INFO, "MSG_CMD_AS_PORTAL_URL_SET V5 success \n");
 		}
 	} 
 	return 0;
@@ -1233,8 +1242,10 @@ int main (int argc, char **argv)
 	msg_cmd_register(MSG_CMD_MANAGE_TEXT_SEND, send_tel_code_handler);
 	msg_cmd_register(MSG_CMD_MANAGE_START_APP, start_app_handler);
 	msg_cmd_register(MSG_CMD_MANAGE_STOP_APP, stop_app_handler);
+	msg_cmd_register(MSG_CMD_MANAGE_LOG, log_handler);
 	msg_dst_module_register_netlink(MODULE_AS);
 	msg_dst_module_register_unix(MODULE_RADIUS);
+	msg_dst_module_register_netlink(MODULE_DPI);
 	curl_global_init(CURL_GLOBAL_ALL);
 
 	struct timeval tv;
@@ -1244,8 +1255,8 @@ int main (int argc, char **argv)
 	add_timer(query_list_clear, 2, 1, queryuser_cache_time, NULL, 0);
 	portal_url_set();
 	black_white_list_add_send();
+	dpi_policy_send();
 	add_advertise();
-
 	while (1) {
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;

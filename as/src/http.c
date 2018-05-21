@@ -1,6 +1,6 @@
 #include "http.h"
 #include "debug.h"
-#include "log.h"
+#include "klog.h"
 #include "memcache.h"
 #include "spinlock.h"
 #include <linux/ip.h>
@@ -239,8 +239,8 @@ static int32 http_redirect(struct sk_buff *skb,
     if (0 != ret)
     {
         DB_ERR("http_ack_reply() call fail.");
-        LOGGING_ERR("Portal redirect fail for ack-reply. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
-                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);
+        /*LOGGING_ERR("Portal redirect fail for ack-reply. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
+                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);*/
         return ret;
     }
     iph = http_iphdr(skb);
@@ -281,8 +281,8 @@ static int32 http_redirect(struct sk_buff *skb,
     if (NULL == nskb)
     {
         DB_ERR("http_skb_alloc() call fail.");
-        LOGGING_ERR("Portal redirect fail for skb-alloc. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
-                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);
+        /*(LOGGING_ERR("Portal redirect fail for skb-alloc. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
+                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);*/
         return -1;
     }
     http_transport_header_fill(nskb, skb, http_data, http_dlen, FALSE, TRUE, TRUE, FALSE);
@@ -292,12 +292,12 @@ static int32 http_redirect(struct sk_buff *skb,
     if (0 != ret)
     {
         DB_ERR("http_skb_xmit() call fail.");
-        LOGGING_ERR("Portal redirect fail for skb-xmit. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
-                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);
+        /*LOGGING_ERR("Portal redirect fail for skb-xmit. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
+                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);*/
     }
-    else
+    /*else
         LOGGING_INFO("Portal redirect successfully. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
-                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);
+                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);*/
     return ret;
 }
 
@@ -350,8 +350,8 @@ static int32 http_advertising_redirect_inner(struct sk_buff *skb,
     if (0 != ret)
     {
         DB_ERR("http_ack_reply() call fail.");
-        LOGGING_ERR("Advertising redirect fail for ack-reply. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
-                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), url);
+        /*LOGGING_ERR("Advertising redirect fail for ack-reply. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
+                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), url);*/
         return ret;
     }
     
@@ -368,8 +368,8 @@ static int32 http_advertising_redirect_inner(struct sk_buff *skb,
     if (NULL == nskb)
     {
         DB_ERR("http_skb_alloc() call fail.");
-        LOGGING_ERR("Advertising redirect fail for skb-alloc. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
-                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), url);
+        /*LOGGING_ERR("Advertising redirect fail for skb-alloc. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
+                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), url);*/
         return -1;
     }
     http_transport_header_fill(nskb, skb, http_data, http_dlen, FALSE, TRUE, TRUE, FALSE);
@@ -379,16 +379,16 @@ static int32 http_advertising_redirect_inner(struct sk_buff *skb,
     if (0 != ret)
     {
         DB_ERR("http_skb_xmit() call fail.");
-        LOGGING_ERR("Advertising redirect fail for skb-xmit. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
-                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), url);
+        /*LOGGING_ERR("Advertising redirect fail for skb-xmit. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
+                MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), url);*/
         return ret;
     }
-    LOGGING_INFO("Advertising redirect successfully. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
-            MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), url);
+    /*LOGGING_INFO("Advertising redirect successfully. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
+            MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), url);*/
     return 0;
 }
 
-
+#ifdef HTTP_REDIRECT_KTHREAD
 typedef enum http_redirect_type_en{
     HTTP_REDIRECT_TYPE_PORTAL       = 0,
     HTTP_REDIRECT_TYPE_ADVERTISING  = 1,
@@ -407,19 +407,20 @@ static BOOL s_http_inited = FALSE;
 
 static int32 http_redirect_thread_cb(void *data)
 {
-
     while (!kthread_should_stop())
     {
         spinlock_lock_bh(&s_spinlock_http_redirect);
         if (list_empty(&s_list_http_redirect))
         {
             spinlock_unlock_bh(&s_spinlock_http_redirect);
+            set_current_state(TASK_UNINTERRUPTIBLE);
             schedule();
+            continue;
         }
-        else
+        
+        while (!list_empty(&s_list_http_redirect))
         {
             http_redirect_t *http;
-            
             http = list_first_entry(&s_list_http_redirect, http_redirect_t, list);
             list_del(&http->list);
             spinlock_unlock_bh(&s_spinlock_http_redirect);
@@ -439,19 +440,20 @@ static int32 http_redirect_thread_cb(void *data)
             kfree_skb(http->skb);
             spinlock_lock_bh(&s_spinlock_http_redirect);
             memcache_free(sp_cache_http_redirect, http);
-            spinlock_unlock_bh(&s_spinlock_http_redirect);
         }
+        spinlock_unlock_bh(&s_spinlock_http_redirect);
     }
     return 0;
 }
+#endif
 
 int32 http_portal_redirect(struct sk_buff *skb,
                            const int8 *url)
 {
+#ifdef HTTP_REDIRECT_KTHREAD
     http_redirect_t *http;
     if (FALSE == s_http_inited)
         return -1;
-    return http_portal_redirect_inner(skb, url);
     spinlock_lock(&s_spinlock_http_redirect);
     http = (http_redirect_t *)memcache_alloc(sp_cache_http_redirect);
     if (NULL != http)
@@ -462,21 +464,24 @@ int32 http_portal_redirect(struct sk_buff *skb,
         strncpy(http->url, url, sizeof(http->url)-1);
         list_add_tail(&http->list, &s_list_http_redirect);
         spinlock_unlock(&s_spinlock_http_redirect);
-        if (sp_kthd_http_redirect && TASK_RUNNING != sp_kthd_http_redirect->state)
+        if (NULL != sp_kthd_http_redirect && TASK_RUNNING != sp_kthd_http_redirect->state)
             wake_up_process(sp_kthd_http_redirect);
     }
     else
         spinlock_unlock(&s_spinlock_http_redirect);
     return 0;
+#else
+    return http_portal_redirect_inner(skb, url);
+#endif
 }
 
 int32 http_advertising_redirect(struct sk_buff *skb,
                                 const int8 *url)
 {
+#ifdef HTTP_REDIRECT_KTHREAD
     http_redirect_t *http;
     if (FALSE == s_http_inited)
         return -1;
-    return http_advertising_redirect_inner(skb, url);
     spinlock_lock(&s_spinlock_http_redirect);
     http = (http_redirect_t *)memcache_alloc(sp_cache_http_redirect);
     if (NULL != http)
@@ -487,15 +492,18 @@ int32 http_advertising_redirect(struct sk_buff *skb,
         strncpy(http->url, url, sizeof(http->url)-1);
         list_add_tail(&http->list, &s_list_http_redirect);
         spinlock_unlock(&s_spinlock_http_redirect);
-        if (sp_kthd_http_redirect && TASK_RUNNING != sp_kthd_http_redirect->state)
+        if (NULL != sp_kthd_http_redirect && TASK_RUNNING != sp_kthd_http_redirect->state)
             wake_up_process(sp_kthd_http_redirect);
     }
     else
         spinlock_unlock(&s_spinlock_http_redirect);
     return 0;
+#else
+    return http_advertising_redirect_inner(skb, url);
+#endif
 }
 
-
+#ifdef HTTP_REDIRECT_KTHREAD
 int32 http_init(const uint32 count)
 {
     int32 ret = -1;
@@ -544,3 +552,4 @@ void http_destroy(void)
     memcache_destroy(sp_cache_http_redirect);
     spinlock_destroy(&s_spinlock_http_redirect);
 }
+#endif

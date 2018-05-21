@@ -41,10 +41,6 @@
 #include <netdb.h>
 #endif
 
-#ifdef HAVE_SYSLOG_H
-#include <syslog.h>
-#endif
-
 #ifdef STDC_HEADERS
 # include <stdlib.h>
 # include <string.h>

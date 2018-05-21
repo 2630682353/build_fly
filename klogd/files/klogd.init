@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006-2011 OpenWrt.org
+
+START=54
+program=klogd
+start() {
+	${program} &
+}
+
+stop() {
+	killall -9 ${program}
+}
+
+restart() {
+	stop "$@"
+	start "$@"
+}

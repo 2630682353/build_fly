@@ -1,6 +1,6 @@
 #include "portal.h"
 #include "rwlock.h"
-#include "log.h"
+#include "klog.h"
 #include "debug.h"
 
 static LIST_HEAD(s_list_portal_interface);

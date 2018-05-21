@@ -13,6 +13,9 @@ PKG_VERSION:=0.1
 PKG_RELEASE:=1
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 
+MODULE_NAME:=klog-m.ko
+MODULE_INIT:=klog
+
 include $(INCLUDE_DIR)/package.mk
 
 define KernelPackage/klog
@@ -39,7 +42,7 @@ endef
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(1)/usr/include
-	$(CP) $(PKG_BUILD_DIR)/log.h $(1)/usr/include/
+	$(CP) $(PKG_BUILD_DIR)/klog.h $(1)/usr/include/
 endef
 
 define Package/klog/install
@@ -51,6 +54,10 @@ define KernelPackage/klog/conffiles
 endef
 
 define KernelPackage/klog/install
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/$(MODULE_INIT).init $(1)/etc/init.d/$(MODULE_INIT)
+	$(INSTALL_DIR)	$(1)/$(MODULES_SUBDIR)
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/$(MODULE_NAME) $(1)/$(MODULES_SUBDIR)
 endef
 
 $(eval $(call KernelPackage,klog))

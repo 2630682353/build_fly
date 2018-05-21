@@ -11,6 +11,8 @@ PKG_NAME:=klogd
 PKG_VERSION:=0.1
 PKG_RELEASE:=1
 
+PROGRAM_INIT:=klogd
+
 include $(INCLUDE_DIR)/package.mk
 
 define Package/klogd
@@ -19,6 +21,7 @@ define Package/klogd
   TITLE:=Klogd progress
   FILES:=$(PKG_BUILD_DIR)/klogd
   AUTOLOAD:=$(call AutoLoad,50,klogd)
+  DEPENDS += +libpthread
 endef
 
 define Package/klogd/description
@@ -42,5 +45,7 @@ endef
 define Package/klogd/install
 	$(INSTALL_DIR) $(1)/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/klogd $(1)/bin/	
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/$(PROGRAM_INIT).init $(1)/etc/init.d/$(PROGRAM_INIT)
 endef
 $(eval $(call BuildPackage,klogd))

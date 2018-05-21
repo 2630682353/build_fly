@@ -5,7 +5,7 @@ PKG_VERSION:=0.1
 PKG_RELEASE:=1
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 
-INIT=netlink_kernel.init
+INIT=netlink_kernel
 KO=netlink_kernel.ko
 
 include $(INCLUDE_DIR)/package.mk
@@ -48,7 +48,7 @@ define Package/libipc/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_DIR) $(1)/$(MODULES_SUBDIR)
 	$(CP) $(PKG_BUILD_DIR)/kernel/$(KO) $(1)/$(MODULES_SUBDIR)
-	$(INSTALL_BIN) ./src/files/$(INIT) $(1)/etc/init.d/$(INIT)
+	$(INSTALL_BIN) ./src/files/$(INIT).init $(1)/etc/init.d/$(INIT)
 
 	$(INSTALL_DIR) $(1)/usr/lib $(1)/usr/include
 	$(CP) $(PKG_BUILD_DIR)/user/libipc.so $(1)/usr/lib/

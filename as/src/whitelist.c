@@ -4,7 +4,8 @@
 #include "debug.h"
 #include "rwlock.h"
 #include "atomic.h"
-#include "log.h"
+#include "klog.h"
+#include "dpi-hook.h"
 
 #include <linux/proc_fs.h>
 #include <linux/netdevice.h>
@@ -267,6 +268,7 @@ int32 whitelist_uplink_skb_check(struct sk_buff *skb)
         whitelist_uplink_update(white);
         ret = ND_ACCEPT;
         whitelist_put(white);
+        dpi_hook(skb, DPI_HOOK_WHITELIST, DPI_DIRECTION_UPLINK);
     }
     return ret;
 }
@@ -279,18 +281,19 @@ static inline int32 whitelist_downlink_update(whitelist_t *white)
     return 0;
 }
 
-int32 whitelist_downlink_skb_check(struct sk_buff *skb,
-                                   const uint8 *hw_dest)
+int32 whitelist_downlink_skb_check(struct sk_buff *skb)
 {
-    int32 ret = NF_DROP;
+    int32 ret = ND_DROP;
+    struct ethhdr *ethh = eth_hdr(skb);
     whitelist_t *white = NULL;
 
-    white = whitelist_search(hw_dest);
+    white = whitelist_search(ethh->h_dest);
     if (NULL != white)
     {
         whitelist_downlink_update(white);
-        ret = NF_ACCEPT;
+        ret = ND_ACCEPT;
         whitelist_put(white);
+        dpi_hook(skb, DPI_HOOK_WHITELIST, DPI_DIRECTION_DOWNLINK);
     }
     return ret;
 }

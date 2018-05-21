@@ -1,9 +1,14 @@
 #!/bin/sh /etc/rc.common
+l3dev=eth0.2
+
 qos_init(){
+	l3dev=`ifstatus wan | grep l3_device | awk '{print $2}'`
+	l3dev=${l3dev#*\"}
+	l3dev=${l3dev%\"*}
 	iptables -t mangle -N QOSDOWN
 	iptables -t mangle -N QOSUP
-	iptables -t mangle -I FORWARD -i eth0.2 -j QOSDOWN
-	iptables -t mangle -I FORWARD -o eth0.2 -j QOSUP
+	iptables -t mangle -I FORWARD -i ${l3dev} -j QOSDOWN
+	iptables -t mangle -I FORWARD -o ${l3dev} -j QOSUP
 
 #	ifconfig ifb0 up
 	tc qdisc add dev eth0 root handle 1: htb default 999
@@ -23,6 +28,8 @@ qos_init(){
 stop(){
 	iptables -t mangle -F QOSDOWN 
 	iptables -t mangle -F QOSUP
+	iptables -t mangle -D FORWARD -i pppoe-wan -j QOSDOWN
+	iptables -t mangle -D FORWARD -o pppoe-wan -j QOSUP
 	iptables -t mangle -D FORWARD -i eth0.2 -j QOSDOWN
 	iptables -t mangle -D FORWARD -o eth0.2 -j QOSUP
 	iptables -t mangle -X QOSDOWN

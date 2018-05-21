@@ -1,7 +1,7 @@
 config acct acct_config
 	option	acct_policy		3
 	option	acct_status		1
-	option	total_seconds		600 #86400 #24h
+	option	total_seconds		86400 #86400 #24h
 	option	total_flows		107374182400 #100GB
 
 config total total_config
@@ -16,6 +16,7 @@ config mac_list  black_list
 config mac_list  white_list
 	list  white  22:22:22:22:22:11
 	list  white  22:22:22:22:22:10
+	list  white  00:0c:29:ac:ab:74
 
 config adv  adv_config
 	option  adv_policy        3
@@ -43,18 +44,6 @@ config advertise
 	option id   4
 	option type  0
 	option url   ads/ads4.html
-
-config gateway_base gateway_base
-	option heartbeat_interval 60
-	option queryuser_cache_time 60
-	option gmc_url_heart    http://192.168.1.81:8888/gateway/heartbeat
-	option gmc_url_result   http://192.168.1.81:8888/gateway/taskResult
-	option token_url        http://192.168.1.160:2080/authentication/platform/token/2/
-	option user_query_url	http://192.168.1.160:2080/authentication/gateway/user/2/
-	option user_register_url  http://192.168.1.160:2080/authentication/gateway/user/register/2/
-	option text_code_url    http://192.168.1.5:2080/authentication/getAuthcode
-	option text_str			"您的服务码是：%06d【华数WIFI】"
-
 
 config vlan_html_map vlan_html_map
 	option 	vlan1 	default

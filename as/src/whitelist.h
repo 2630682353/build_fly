@@ -37,8 +37,7 @@ whitelist_t *whitelist_get(whitelist_t *white);
 void whitelist_put(whitelist_t *white);
 whitelist_t *whitelist_search(const void *mac);
 int32 whitelist_uplink_skb_check(struct sk_buff *skb);
-int32 whitelist_downlink_skb_check(struct sk_buff *skb,
-                                   const uint8 *hw_dest);
+int32 whitelist_downlink_skb_check(struct sk_buff *skb);
 int32 whitelist_proc_init(struct proc_dir_entry *parent);
 void whitelist_proc_destroy(struct proc_dir_entry *parent);
 

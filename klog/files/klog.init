@@ -1,0 +1,13 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006-2011 OpenWrt.org
+
+START=52
+KVER=`uname -r`
+KO=klog-m.ko
+start() {
+	insmod /lib/modules/${KVER}/${KO}
+}
+
+stop() {
+	rmmod /lib/modules/${KVER}/${KO}
+}

@@ -2,7 +2,7 @@ PROJ = klogd
 CC := @gcc
 RM := @rm -f
 
-CFLAGS := -Wall -g
+CFLAGS := -Wall -g -DLINUX_APP
 
 INC_DIR := -I.
 LIBS := -lpthread

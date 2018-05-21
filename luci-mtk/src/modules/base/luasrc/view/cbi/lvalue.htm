@@ -20,16 +20,23 @@
 		%>
 		<li><label>
 		<input class="cbi-input-radio" onclick="cbi_d_update(this.id)" onchange="cbi_d_update(this.id)" type="radio"<%= attr("id", cbid..self.vallist[i]) .. attr("name", cbid) .. attr("value", key) .. ifattr((self:cfgvalue(section) or self.default) == key, "checked", "checked") %> />
-		<span><%=self.vallist[i]%></span><span class="spanbox"></spanbox></label></li>
+		<span><%if self.vallist[i] == "dhcp" then%>动态分配<% elseif self.vallist[i] == "static" then%>静态地址<%else %><%=self.vallist[i]%><% end%>
+		</span><span class="spanbox"></spanbox></label></li>
 		<% if c == self.size then c = 0 %>
 		<% if self.orientation == "horizontal" then %>&#160;<% else %><br /><% end %>
 		<% end end %></ul>
 
 		<script type="text/javascript">
 		window.onload=function(){
-				$('.cbi-input-radio').eq(0).click()
-			};
+			for(var i=0;i<$('.cbi-input-radio').length;i++){
+				if($('.cbi-input-radio').eq(i).attr('checked')){
+					$('.cbi-input-radio').eq(i).parent().parent().find('.spanbox').css({'background-color':'#66c6f2','border':'1px solid #66c6f2'})
+				}
+			}
+		};
 		$('.cbi-input-radio').click(function(){
+			$(this).attr('checked',true)
+			$(this).parent().parent().siblings().find('.cbi-input-radio').attr('checked',false)
 			$(this).parent().find('.spanbox').css({'background-color':'#66c6f2','border':'1px solid #66c6f2'})
 			$(this).parent().parent().siblings().find('.spanbox').css('background-color','#fff')
 		})

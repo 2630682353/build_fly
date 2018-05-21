@@ -56,6 +56,7 @@ endef
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./src/* $(PKG_BUILD_DIR)/
+	$(CP) ./etc $(PKG_BUILD_DIR)/
 endef
 
 
@@ -80,7 +81,11 @@ endef
 # directory) to the install directory.
 define Package/gateway_proxy/install
 	$(INSTALL_DIR) $(1)/bin
+	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/gateway_proxy $(1)/bin/	
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/log_level $(1)/bin/
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/etc/config/gateway_config $(1)/etc/config/
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/etc/config/dpi_config $(1)/etc/config/
 endef
 
 

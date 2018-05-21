@@ -8,6 +8,7 @@ s.anonymous = true
 
 ipaddr =  s:option(Value,"ipaddr", translate("IPv4 address"))
 ipaddr.datatype = "ip4addr"
+ipaddr.rmempty = false
 
 
 netmask = s:option(ListValue, "netmask",

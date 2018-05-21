@@ -8,7 +8,7 @@ var isOld = 0;//记录当次是否为老用户
 var failureCount = 0;//认证失败计数
 
 var pageData;//页面配置数据
-var nextUrl = "http://www.baidu.com";//下一页url
+var nextUrl = "http://www.aviup.com";//下一页url
 var current;//当前流程编号
 //初始化字体/布局大小等
 function initFont(){

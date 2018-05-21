@@ -98,7 +98,7 @@ function reboot(){
 	apply_xhr.get('<%=luci.dispatcher.build_url("admin", "system","reboot")%>', {"reboot":1},
 		function(){	
 		});
-	window.setTimeout(function(){window.top.location='<%=controller%>/admin';},60000);
+	window.setTimeout(function(){window.location='<%=controller%>/admin';},60000);
 	
 }
 
@@ -112,7 +112,7 @@ function reset(){
 			function(x){	
 				e.innerHTML=x.responseText;
 			});
-		window.setTimeout(function(){window.top.location='192.168.1.1';},60000);
+		window.setTimeout(function(){window.location='192.168.1.1';},90000);
 
 	}
 }

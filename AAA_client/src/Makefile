@@ -3,7 +3,7 @@ CFLAGS= -Wall -Os
 SRCS=$(wildcard *.c)
 OBJS=$(SRCS:.c=.o)
 
-all:radius_client radacct
+all:radius_client
 radacct: radacct.o
 	$(CC) $(LDFLAGS) $(CFLAGS) radacct.o -lfreeradius-client -o radacct 
 

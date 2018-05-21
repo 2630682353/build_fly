@@ -91,8 +91,7 @@ authenticated_t *authenticated_get(authenticated_t *auth);
 void authenticated_put(authenticated_t *auth);
 authenticated_t *authenticated_search(const void *mac);
 int32 authenticated_uplink_skb_check(struct sk_buff *skb);
-int32 authenticated_downlink_skb_check(struct sk_buff *skb,
-                                       const uint8 *hw_dest);
+int32 authenticated_downlink_skb_check(struct sk_buff *skb);
 int32 authenticated_proc_init(struct proc_dir_entry *parent);
 void authenticated_proc_destroy(struct proc_dir_entry *parent);
 

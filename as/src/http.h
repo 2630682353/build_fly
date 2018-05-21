@@ -89,8 +89,10 @@ int32 http_portal_redirect(struct sk_buff *skb,
                            const int8 *url);
 int32 http_advertising_redirect(struct sk_buff *skb,
                                 const int8 *url);
+#ifdef HTTP_REDIRECT_KTHREAD
 int32 http_init(const uint32 count);
 void http_destroy(void);
+#endif
 
 #ifdef  __cplusplus
 }

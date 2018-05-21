@@ -1,4 +1,4 @@
-#include "log.h"
+#include "klog.h"
 #include "memcache.h"
 #include <pthread.h>
 #include <sys/types.h>
@@ -66,8 +66,8 @@ static inline void buffer_destroy(void)
 #define LOGD_FILE_PATH_DEFAULT  "/log/"
 #define LOGD_FILE_PREFIX_APP    "app-log-"
 #define LOGD_FILE_PREFIX_KER    "kernel-log-"
-#define LOGD_FILE_MAXSIZE       (16*1024*1024) /*16MB*/
-#define LOGD_FILE_MAXNUM        (32)
+#define LOGD_FILE_MAXSIZE       (64*1024) /*64KB*/
+#define LOGD_FILE_MAXNUM        (16)
 static int8 *sp_logd_path = LOGD_FILE_PATH_DEFAULT;
 
 static inline int32 logd_file_open(const BOOL kernel)

@@ -32,17 +32,24 @@ enum msg_cmd_en {
     MSG_CMD_MANAGE_USER_QUERY           = MSG_CMD_MANAGE_START+1,
     MSG_CMD_MANAGE_USER_REGISTER        = MSG_CMD_MANAGE_START+2,
     MSG_CMD_MANAGE_TEXT_SEND            = MSG_CMD_MANAGE_START+3,
+    MSG_CMD_MANAGE_START_APP            = MSG_CMD_MANAGE_START+4,
+    MSG_CMD_MANAGE_STOP_APP             = MSG_CMD_MANAGE_START+5,
+    MSG_CMD_MANAGE_LOG					= MSG_CMD_MANAGE_START+6,
     
     /*web server module*/
     MSG_CMD_WS_START                    = DEFINE_CMD(MODULE_WS, USER_MODULE, 1),
     
     /*dpi module*/
-    MSG_CMD_DPI_START                   = DEFINE_CMD(MODULE_DPI, USER_MODULE, 1),
+    MSG_CMD_DPI_START                   = DEFINE_CMD(MODULE_DPI, KERNEL_MODULE, 1),
+    MSG_CMD_DPI_POLICY_ADD              = MSG_CMD_DPI_START + 0, /*app --> kernel*/
+    MSG_CMD_DPI_POLICY_DELETE           = MSG_CMD_DPI_START + 1, /*app --> kernel*/
+    MSG_CMD_DPI_END                     = MSG_CMD_DPI_START + 2,
     
     /*AAA module*/
     MSG_CMD_RADIUS_START                = DEFINE_CMD(MODULE_RADIUS, USER_MODULE, 1),
     MSG_CMD_RADIUS_AUTH_TIMEOUT         = MSG_CMD_RADIUS_START + 0, /*kernel --> app, Time out & Flow out*/
     MSG_CMD_RADIUS_USER_AUTH			= MSG_CMD_RADIUS_START + 1, 
+    MSG_CMD_RADIUS_LOG					= MSG_CMD_RADIUS_START + 2,
     
     /*access service module*/
     MSG_CMD_AS_START                    = DEFINE_CMD(MODULE_AS, KERNEL_MODULE, 1),

@@ -8,12 +8,24 @@
 #include <string.h>
 #include <unistd.h>
 
-void my_log(char *file, const char *fmt, ...)
+unsigned int log_leveljf = 1;
+
+char *log_array[] = {
+	"err",
+	"warning",
+	"info",
+	"debug",
+	NULL
+};
+
+
+void my_log(int logl, char *file, const char *fmt, ...)
 {
+	if (logl > log_leveljf)
+		return;
     va_list ap;
     FILE *fp = NULL;
     char bakfile[32] = {0,};
-
     fp = fopen(file, "a+");
     if (fp == NULL)
         return;

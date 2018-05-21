@@ -275,7 +275,7 @@ function action_flashops()
 				})
 			else
 				nixio.fs.unlink(image_tmp)
-				luci.template.render("admin_system/flashops", {
+				luci.template.render("system", {
 					reset_avail   = reset_avail,
 					upgrade_avail = upgrade_avail,
 					image_invalid = true
@@ -307,7 +307,7 @@ function action_flashops()
 		--
 		-- Overview
 		--
-		luci.template.render("admin_system/flashops", {
+		luci.template.render("system", {
 			reset_avail   = reset_avail,
 			upgrade_avail = upgrade_avail
 		})

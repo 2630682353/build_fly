@@ -9,8 +9,8 @@ s.anonymous = true
 wanprotocol =s:option(ListValue,"proto","协议")
 wanprotocol.widget = "radio"
 
-wanprotocol:value("动态分配")
-wanprotocol:value("静态地址")
+wanprotocol:value("dhcp")
+wanprotocol:value("static")
 wanprotocol:value("pppoe")
 wanprotocol.orientation="horizontal"
 
@@ -24,7 +24,7 @@ password:depends("proto", "pppoe")
 
 ipaddr = s:option(Value, "ipaddr", translate("IPv4 address"))
 ipaddr.datatype = "ip4addr"
-ipaddr:depends("proto", "静态地址");
+ipaddr:depends("proto", "static");
 
 
 netmask = s:option(ListValue, "netmask",
@@ -34,16 +34,16 @@ netmask.datatype = "ip4addr"
 netmask:value("255.255.255.0")
 netmask:value("255.255.0.0")
 netmask:value("255.0.0.0")
-netmask:depends("proto", "静态地址")
+netmask:depends("proto", "static")
 
 
 gateway = s:option(Value, "gateway", translate("IPv4 gateway"))
 gateway.datatype = "ip4addr"
-gateway:depends("proto", "静态地址")
+gateway:depends("proto", "static")
 
 dns = s:option(Value,"dns", translate("Use custom DNS servers"))
 
 dns.datatype = "ipaddr"
-dns:depends("proto", "静态地址")
+dns:depends("proto", "static")
 
 return m

@@ -182,7 +182,7 @@ void connection_handel(connection_t *con)
 		printf("%s\r\n\r\n","Content-Type:text/html;charset=UTF-8");
 		file = fopen(con->html_path,"r");    
 		if(stat(con->html_path, &st)) {
-			CGI_LOG("stat index error\n"); 
+			CGI_LOG(LOG_ERR, "html stat index error\n"); 
 			goto out;
 		} else {
 		

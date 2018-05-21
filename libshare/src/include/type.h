@@ -27,7 +27,7 @@ typedef struct buffer_st{
     uint32 size;            /*buffer total size*/
     uint32 offset;          /*buffer used offset*/
     uint32 len;             /*buffer used length*/
-    //struct buffer_st *next; /*next buffer*/
+    struct buffer_st *next; /*next buffer*/
 }buffer_t;
 
 #ifdef  __cplusplus

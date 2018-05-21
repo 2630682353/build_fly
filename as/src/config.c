@@ -10,7 +10,6 @@
 
 #include <linux/kthread.h>
 #include <linux/delay.h>
-#include <linux/preempt.h>
 
 static void config_error(void *buf,
                          int32 *size,
@@ -468,18 +467,20 @@ static struct task_struct *sp_kthd_cfg = NULL;
 
 static int32 config_event_kthread_func(void *data)
 {
+    event_info_t *event = NULL;
+    int32 ret;
     while (!kthread_should_stop())
     {
         spinlock_lock_bh(&s_spinlock_list_event);
         if (list_empty(&s_list_event))
         {
             spinlock_unlock_bh(&s_spinlock_list_event);
+            set_current_state(TASK_UNINTERRUPTIBLE);
             schedule();
+            continue;
         }
-        else
+        while (!list_empty(&s_list_event))
         {
-            event_info_t *event = NULL;
-            int32 ret;
             event = list_first_entry(&s_list_event, event_info_t, list);
             list_del(&event->list);
             spinlock_unlock_bh(&s_spinlock_list_event);
@@ -490,7 +491,9 @@ static int32 config_event_kthread_func(void *data)
                 free(event->data);
             free(event);
             event = NULL;
+            spinlock_lock_bh(&s_spinlock_list_event);
         }
+        spinlock_unlock_bh(&s_spinlock_list_event);
     }
     return 0;
 }
@@ -505,7 +508,7 @@ void config_authenticated_timeout(const int8 *mac)
     spinlock_lock(&s_spinlock_list_event);
     list_add_tail(&event->list, &s_list_event);
     spinlock_unlock(&s_spinlock_list_event);
-    if (sp_kthd_cfg && TASK_RUNNING != sp_kthd_cfg->state)
+    if (NULL != sp_kthd_cfg && TASK_RUNNING != sp_kthd_cfg->state)
         wake_up_process(sp_kthd_cfg);
 }
 
@@ -519,7 +522,7 @@ void config_authenticated_timeout_bh(const int8 *mac)
     spinlock_lock_bh(&s_spinlock_list_event);
     list_add_tail(&event->list, &s_list_event);
     spinlock_unlock_bh(&s_spinlock_list_event);
-    if (sp_kthd_cfg && TASK_RUNNING != sp_kthd_cfg->state)
+    if (NULL != sp_kthd_cfg && TASK_RUNNING != sp_kthd_cfg->state)
         wake_up_process(sp_kthd_cfg);
 }
 
@@ -538,7 +541,7 @@ int32 config_init(void)
         ++cmd;
     }
     sp_kthd_cfg = kthread_create(config_event_kthread_func, NULL, "kthd-cfg");
-    if (unlikely(NULL == sp_kthd_cfg))
+    if (unlikely(IS_ERR(sp_kthd_cfg)))
     {
         ret = PTR_ERR(sp_kthd_cfg);
         DB_ERR("kthread_create() call fail. errno[%d].", ret);
@@ -561,10 +564,10 @@ out:
 void config_final(void)
 {
     int32 cmd = MSG_CMD_AS_END - 1;
+    kthread_stop(sp_kthd_cfg);
     while (cmd >= MSG_CMD_AS_START)
     {
         msg_cmd_unregister(cmd);
         --cmd;
     }
-    kthread_stop(sp_kthd_cfg);
 }

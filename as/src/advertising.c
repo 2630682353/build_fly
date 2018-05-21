@@ -4,7 +4,7 @@
 #include "rwlock.h"
 #include "debug.h"
 #include "time.h"
-#include "log.h"
+#include "klog.h"
 #include "http.h"
 
 #include <linux/ip.h>
