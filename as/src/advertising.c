@@ -285,9 +285,9 @@ void advertising_del(advertising_t *ads)
 {
     if (unlikely(FALSE == s_ads_list.inited || NULL == ads))
         return;
-    if (likely(atomic_read(&ads->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&ads->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&ads->refcnt)))
+    else
         return;
     switch (ads->type)
     {
@@ -322,9 +322,13 @@ void advertising_del(advertising_t *ads)
 
 advertising_t *advertising_get(advertising_t *ads)
 {
-    if (likely(NULL != ads))
+    if (likely(NULL != ads && atomic_read(&ads->refcnt) > 0))
+    {
         atomic_inc(&ads->refcnt);
-    return ads;
+        return ads;
+    }
+    else
+        return NULL;
 }
 
 void advertising_put(advertising_t *ads)
@@ -337,9 +341,9 @@ static void advertising_del_bh(advertising_t *ads)
 {
     if (unlikely(FALSE == s_ads_list.inited || NULL == ads))
         return;
-    if (likely(atomic_read(&ads->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&ads->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&ads->refcnt)))
+    else
         return;
     switch (ads->type)
     {
@@ -397,7 +401,7 @@ advertising_t *advertising_search(const uint32 id,
             }
             if (NULL != ads && &ads->list != &s_ads_list.list_ads_push)
             {
-                if (id == ads->id)
+                if (id == ads->id && atomic_read(&ads->refcnt) > 0)
                     atomic_inc(&ads->refcnt);
                 else
                     ads = NULL;
@@ -416,7 +420,7 @@ advertising_t *advertising_search(const uint32 id,
             }
             if (NULL != ads && &ads->list != &s_ads_list.list_ads_embed)
             {
-                if (id == ads->id)
+                if (id == ads->id && atomic_read(&ads->refcnt) > 0)
                     atomic_inc(&ads->refcnt);
                 else
                     ads = NULL;
@@ -443,7 +447,10 @@ static advertising_t *advertising_next(const uint32 id,
             if (!list_empty(&s_ads_list.list_ads_push))
             {
                 ads = list_first_entry(&s_ads_list.list_ads_push, advertising_t, list);
-                atomic_inc(&ads->refcnt);
+                if (NULL != ads && atomic_read(&ads->refcnt) > 0)
+                    atomic_inc(&ads->refcnt);
+                else
+                    ads = NULL;
             }
             else
                 ads = NULL;
@@ -454,7 +461,10 @@ static advertising_t *advertising_next(const uint32 id,
             if (!list_empty(&s_ads_list.list_ads_embed))
             {
                 ads = list_first_entry(&s_ads_list.list_ads_embed, advertising_t, list);
-                atomic_inc(&ads->refcnt);
+                if (NULL != ads && atomic_read(&ads->refcnt) > 0)
+                    atomic_inc(&ads->refcnt);
+                else
+                    ads = NULL;
             }
             else
                 ads = NULL;
@@ -484,7 +494,10 @@ static advertising_t *advertising_next(const uint32 id,
                 }
                 else
                     ads = list_first_entry(&s_ads_list.list_ads_push, advertising_t, list);
-                atomic_inc(&ads->refcnt);
+                if (NULL != ads && atomic_read(&ads->refcnt) > 0)
+                    atomic_inc(&ads->refcnt);
+                else
+                    ads = NULL;
             }
             else
                 ads = NULL;
@@ -506,7 +519,10 @@ static advertising_t *advertising_next(const uint32 id,
                 }
                 else
                     ads = list_first_entry(&s_ads_list.list_ads_embed, advertising_t, list);
-                atomic_inc(&ads->refcnt);
+                if (NULL != ads && atomic_read(&ads->refcnt) > 0)
+                    atomic_inc(&ads->refcnt);
+                else
+                    ads = NULL;
             }
             else
                 ads = NULL;
@@ -537,7 +553,10 @@ static advertising_t *advertising_random(const int32 type)
                 --index;
             }
             ASSERT(&ads->list != &s_ads_list.list_ads_push);
-            atomic_inc(&ads->refcnt);
+            if (NULL != ads && atomic_read(&ads->refcnt) > 0)
+                atomic_inc(&ads->refcnt);
+            else
+                ads = NULL;
         }
         rwlock_rdunlock(&s_ads_list.rwlock_ads_push);
         break;
@@ -553,7 +572,10 @@ static advertising_t *advertising_random(const int32 type)
                 --index;
             }
             ASSERT(&ads->list != &s_ads_list.list_ads_embed);
-            atomic_inc(&ads->refcnt);
+            if (NULL != ads && atomic_read(&ads->refcnt) > 0)
+                atomic_inc(&ads->refcnt);
+            else
+                ads = NULL;
         }
         rwlock_rdunlock(&s_ads_list.rwlock_ads_embed);
         break;

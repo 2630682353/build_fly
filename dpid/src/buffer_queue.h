@@ -12,6 +12,7 @@ extern "C" {
 typedef struct buffer_queue_st{
     buffer_t *head;
     buffer_t *tail;
+    uint32 maxnum;
     uint32 buffnum;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
@@ -20,6 +21,7 @@ typedef struct buffer_queue_st{
     pthread_mutex_t cache_mutex;
 }buffer_queue_t;
 #define BUFFER_QUEUE_BUFFER_MAXSIZE         ((32*1024) - sizeof(buffer_t))
+#define BUFFER_QUEUE_DEFAULT_MAXNUM         (128)
 
 static inline buffer_t *buffer_queue_buffer_alloc(buffer_queue_t *queue)
 {
@@ -63,23 +65,32 @@ static inline void buffer_queue_buffer_free(buffer_queue_t *queue,
 static inline int32 buffer_queue_enqueue(buffer_queue_t *queue,
                                          buffer_t *buf)
 {
+    int32 ret = 0;
     if (NULL == queue || NULL == buf)
         return -1;
     pthread_mutex_lock(&queue->mutex);
-    if (0 == queue->buffnum)
+    if (queue->buffnum >= queue->maxnum)
     {
-        queue->head = queue->tail = buf;
-        queue->buffnum = 1;
-        pthread_cond_signal(&queue->cond);
+        buffer_queue_buffer_free(queue, buf);
+        ret = -1;
     }
     else
     {
-        queue->tail->next = buf;
-        queue->tail = buf;
-        ++queue->buffnum;
+        if (0 == queue->buffnum)
+        {
+            queue->head = queue->tail = buf;
+            queue->buffnum = 1;
+        }
+        else
+        {
+            queue->tail->next = buf;
+            queue->tail = buf;
+            ++queue->buffnum;
+        }
+        pthread_cond_signal(&queue->cond);
     }
     pthread_mutex_unlock(&queue->mutex);
-    return 0;
+    return ret;
 }
 
 static inline buffer_t *buffer_queue_dequeue(buffer_queue_t *queue)
@@ -110,7 +121,8 @@ static inline buffer_t *buffer_queue_dequeue(buffer_queue_t *queue)
     return buf;
 }
 
-static inline buffer_queue_t *buffer_queue_create(const uint32 buffsize)
+static inline buffer_queue_t *buffer_queue_create(const uint32 buffsize,
+                                                  const uint32 maxnum)
 {
     buffer_queue_t *queue;
     uint32 bsize = (buffsize <= 0 || buffsize >= BUFFER_QUEUE_BUFFER_MAXSIZE) ? BUFFER_QUEUE_BUFFER_MAXSIZE : buffsize;
@@ -124,6 +136,7 @@ static inline buffer_queue_t *buffer_queue_create(const uint32 buffsize)
         return NULL;
     }
     queue->buffsize = bsize;
+    queue->maxnum = maxnum <= 0 ? BUFFER_QUEUE_DEFAULT_MAXNUM : maxnum;
     pthread_mutex_init(&queue->cache_mutex, NULL);
     queue->head = NULL;
     queue->tail = NULL;

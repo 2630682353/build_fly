@@ -7,6 +7,8 @@
 #include <linux/udp.h>
 #include <linux/if_ether.h>
 #include <linux/if_vlan.h>
+#include <linux/delay.h>
+#include <linux/kthread.h>
 
 #include "type.h"
 #include "memcache.h"
@@ -130,10 +132,17 @@ static inline void policy_info_add_bh(policy_info_head_t *head,
     spinlock_lock(&s_spinlock_cache_policy);
     info = (policy_info_t *)memcache_alloc(sp_cache_policy);
     spinlock_unlock(&s_spinlock_cache_policy);
+    if (NULL == info)
+    {
+        DB_ERR("memcache_alloc() call failed for policy_info_t alloc.");
+        return;
+    }
     info->head = head;
     atomic_set(&info->refcnt, 1);
     memcpy(&info->policy, policy, sizeof(*policy));
     info->start_time = info->latest_time = curtime();
+    DB_INF("info:%p, info->start_time:%llu, info->latest_time:%llu, curtime:%lu.",
+        info, info->start_time, info->latest_time, curtime());
     info->grabed_count = 0;
     info->lose_count = 0;
     list_add_tail(&info->list, &head->head);
@@ -149,8 +158,8 @@ static inline void policy_info_add_bh(policy_info_head_t *head,
                     ",l4_proto[%s],outer_port[%u].",
                     dpi_position_to_str(info->policy.position), info->policy.maxcnt, 
                     info->policy.maxsecs, MAC2STR(info->policy.intra_mac),
-                    IP2STR(info->policy.intra_ip), IP2STR(info->policy.intra_mask), 
-                    IP2STR(info->policy.outer_ip), IP2STR(info->policy.outer_mask),
+                    IP2STR(htonl(info->policy.intra_ip)), IP2STR(htonl(info->policy.intra_mask)), 
+                    IP2STR(htonl(info->policy.outer_ip)), IP2STR(htonl(info->policy.outer_mask)),
                     dpi_l4_proto_to_str(info->policy.l4_proto), info->policy.port.outer_port);
     else
         LOGGING_INFO("Successfully adding dpi policy to dpi module. "
@@ -161,19 +170,19 @@ static inline void policy_info_add_bh(policy_info_head_t *head,
                     ",l4_proto[%s].",
                     dpi_position_to_str(info->policy.position), info->policy.maxcnt, 
                     info->policy.maxsecs, MAC2STR(info->policy.intra_mac),
-                    IP2STR(info->policy.intra_ip), IP2STR(info->policy.intra_mask), 
-                    IP2STR(info->policy.outer_ip), IP2STR(info->policy.outer_mask),
+                    IP2STR(htonl(info->policy.intra_ip)), IP2STR(htonl(info->policy.intra_mask)), 
+                    IP2STR(htonl(info->policy.outer_ip)), IP2STR(htonl(info->policy.outer_mask)),
                     dpi_l4_proto_to_str(info->policy.l4_proto));
 }
 
 static inline void policy_info_del_bh(policy_info_head_t *head,
                                       policy_info_t *info)
 {
-    if (NULL == info)
+    if (unlikely(NULL == head || NULL == info))
         return;
-    if (likely(atomic_read(&info->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&info->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&info->refcnt)))
+    else
         return;
     if (DPI_L4_PROTO_TCP == info->policy.l4_proto
         || DPI_L4_PROTO_UDP == info->policy.l4_proto)
@@ -185,8 +194,8 @@ static inline void policy_info_del_bh(policy_info_head_t *head,
                     ",l4_proto[%s],outer_port[%u].",
                     dpi_position_to_str(info->policy.position), info->policy.maxcnt, 
                     info->policy.maxsecs, MAC2STR(info->policy.intra_mac),
-                    IP2STR(info->policy.intra_ip), IP2STR(info->policy.intra_mask), 
-                    IP2STR(info->policy.outer_ip), IP2STR(info->policy.outer_mask),
+                    IP2STR(htonl(info->policy.intra_ip)), IP2STR(htonl(info->policy.intra_mask)), 
+                    IP2STR(htonl(info->policy.outer_ip)), IP2STR(htonl(info->policy.outer_mask)),
                     dpi_l4_proto_to_str(info->policy.l4_proto), info->policy.port.outer_port);
     else
         LOGGING_INFO("Successfully removing dpi policy from dpi module. "
@@ -197,8 +206,8 @@ static inline void policy_info_del_bh(policy_info_head_t *head,
                     ",l4_proto[%s].",
                     dpi_position_to_str(info->policy.position), info->policy.maxcnt, 
                     info->policy.maxsecs, MAC2STR(info->policy.intra_mac),
-                    IP2STR(info->policy.intra_ip), IP2STR(info->policy.intra_mask), 
-                    IP2STR(info->policy.outer_ip), IP2STR(info->policy.outer_mask),
+                    IP2STR(htonl(info->policy.intra_ip)), IP2STR(htonl(info->policy.intra_mask)), 
+                    IP2STR(htonl(info->policy.outer_ip)), IP2STR(htonl(info->policy.outer_mask)),
                     dpi_l4_proto_to_str(info->policy.l4_proto));
     rwlock_wrlock_bh(&head->lock);
     list_del(&info->list);
@@ -212,11 +221,11 @@ static inline void policy_info_del_bh(policy_info_head_t *head,
 static inline void policy_info_del(policy_info_head_t *head,
                                    policy_info_t *info)
 {
-    if (NULL == head || NULL == info)
+    if (unlikely(NULL == head || NULL == info))
         return;
-    if (likely(atomic_read(&info->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&info->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&info->refcnt)))
+    else
         return;
     if (DPI_L4_PROTO_TCP == info->policy.l4_proto
         || DPI_L4_PROTO_UDP == info->policy.l4_proto)
@@ -228,8 +237,8 @@ static inline void policy_info_del(policy_info_head_t *head,
                     ",l4_proto[%s],outer_port[%u].",
                     dpi_position_to_str(info->policy.position), info->policy.maxcnt, 
                     info->policy.maxsecs, MAC2STR(info->policy.intra_mac),
-                    IP2STR(info->policy.intra_ip), IP2STR(info->policy.intra_mask), 
-                    IP2STR(info->policy.outer_ip), IP2STR(info->policy.outer_mask),
+                    IP2STR(htonl(info->policy.intra_ip)), IP2STR(htonl(info->policy.intra_mask)), 
+                    IP2STR(htonl(info->policy.outer_ip)), IP2STR(htonl(info->policy.outer_mask)),
                     dpi_l4_proto_to_str(info->policy.l4_proto), info->policy.port.outer_port);
     else
         LOGGING_INFO("Successfully removing dpi policy from dpi module. "
@@ -240,8 +249,8 @@ static inline void policy_info_del(policy_info_head_t *head,
                     ",l4_proto[%s].",
                     dpi_position_to_str(info->policy.position), info->policy.maxcnt, 
                     info->policy.maxsecs, MAC2STR(info->policy.intra_mac),
-                    IP2STR(info->policy.intra_ip), IP2STR(info->policy.intra_mask), 
-                    IP2STR(info->policy.outer_ip), IP2STR(info->policy.outer_mask),
+                    IP2STR(htonl(info->policy.intra_ip)), IP2STR(htonl(info->policy.intra_mask)), 
+                    IP2STR(htonl(info->policy.outer_ip)), IP2STR(htonl(info->policy.outer_mask)),
                     dpi_l4_proto_to_str(info->policy.l4_proto));
     rwlock_wrlock(&head->lock);
     list_del(&info->list);
@@ -254,15 +263,25 @@ static inline void policy_info_del(policy_info_head_t *head,
 
 static policy_info_t *policy_info_get(policy_info_t *info)
 {
-    if (NULL != info)
+    if (likely(NULL != info && atomic_read(&info->refcnt) > 0))
+    {
         atomic_inc(&info->refcnt);
-    return info;
+        return info;
+    }
+    else
+        return NULL;
 }
 
 static inline void policy_info_put(policy_info_t *info)
 {
-    if (NULL != info)
+    if (likely(NULL != info))
         policy_info_del(info->head, info);
+}
+
+static inline void policy_info_put_bh(policy_info_t *info)
+{
+    if (likely(NULL != info))
+        policy_info_del_bh(info->head, info);
 }
 
 static int32 dpi_policy_add_bh(const dpi_policy_t *policy)
@@ -277,9 +296,10 @@ static int32 dpi_policy_add_bh(const dpi_policy_t *policy)
 static inline void __dpi_policy_del_bh(policy_info_head_t *head,
                                        const dpi_policy_t *policy)
 {
-    policy_info_t *info;
+    policy_info_t *info, *info_next;
     rwlock_rdlock_bh(&head->lock);
-    list_for_each_entry(info, &head->head, list)
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(info, info_next, &head->head, list)
     {
         if (0 == memcmp(&info->policy, policy, sizeof(*policy)))
         {
@@ -302,13 +322,15 @@ static void dpi_policy_del_bh(const dpi_policy_t *policy)
 static inline void __dpi_policy_del(policy_info_head_t *head,
                                     const dpi_policy_t *policy)
 {
-    policy_info_t *info;
+    policy_info_t *info, *info_next;
     rwlock_rdlock(&head->lock);
-    list_for_each_entry(info, &head->head, list)
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(info, info_next, &head->head, list)
     {
         if (0 == memcmp(&info->policy, policy, sizeof(*policy)))
         {
             rwlock_rdunlock(&head->lock);
+            DB_INF("info:%p, info->refcnt:%d.", info, atomic_read(&info->refcnt));
             policy_info_del(head, info);
             return;
         }
@@ -366,8 +388,8 @@ static int32 config_dpi_policy_add(const int32 cmd,
             ",l4_proto[%s],outer_port[%u].",
             dpi_position_to_str(policy->position), policy->maxcnt, 
             policy->maxsecs, MAC2STR(policy->intra_mac),
-            IP2STR(policy->intra_ip), IP2STR(policy->intra_mask),
-            IP2STR(policy->outer_ip), IP2STR(policy->outer_mask),
+            IP2STR(htonl(policy->intra_ip)), IP2STR(htonl(policy->intra_mask)),
+            IP2STR(htonl(policy->outer_ip)), IP2STR(htonl(policy->outer_mask)),
             dpi_l4_proto_to_str(policy->l4_proto), policy->port.outer_port);
     ret = dpi_policy_add_bh(policy);
     if (0 != ret)
@@ -408,8 +430,8 @@ static int32 config_dpi_policy_del(const int32 cmd,
             ",l4_proto[%s],outer_port[%u].",
             dpi_position_to_str(policy->position), policy->maxcnt, 
             policy->maxsecs, MAC2STR(policy->intra_mac),
-            IP2STR(policy->intra_ip), IP2STR(policy->intra_mask),
-            IP2STR(policy->outer_ip), IP2STR(policy->outer_mask),
+            IP2STR(htonl(policy->intra_ip)), IP2STR(htonl(policy->intra_mask)),
+            IP2STR(htonl(policy->outer_ip)), IP2STR(htonl(policy->outer_mask)),
             dpi_l4_proto_to_str(policy->l4_proto), policy->port.outer_port);
     dpi_policy_del_bh(policy);
     *olen = 0;
@@ -429,6 +451,7 @@ typedef struct dpi_grab_data_st{
     int32 position;
     uint64 timestamp;
     uint8 intra_mac[HWADDR_SIZE];
+    int8 reserves[2];
     uint32 intra_ip;
     uint32 outer_ip;
     int32 l4_proto;
@@ -508,6 +531,8 @@ static inline buffer_t *grab_buff_alloc(void)
 
 static inline void grab_buff_free(buffer_t *buf)
 {
+    if (NULL == buf)
+        return;
     spinlock_lock(&s_spinlock_cache_grabed);
     memcache_free(sp_cache_grabed, buf);
     spinlock_unlock(&s_spinlock_cache_grabed);
@@ -515,6 +540,8 @@ static inline void grab_buff_free(buffer_t *buf)
 
 static inline void grab_buff_free_bh(buffer_t *buf)
 {
+    if (NULL == buf)
+        return;
     spinlock_lock_bh(&s_spinlock_cache_grabed);
     memcache_free(sp_cache_grabed, buf);
     spinlock_unlock_bh(&s_spinlock_cache_grabed);
@@ -580,7 +607,9 @@ static void policy_grab_uplink_skb(const struct sk_buff *skb,
     const struct iphdr *iph;
     buffer_t *buf = grab_buff_alloc();
     dpi_grab_data_t *grab;
-    
+    uint32 real_grab_dlen;
+    uint32 i;
+
     info->latest_time = curtime();
     if (NULL == buf)
     {
@@ -589,7 +618,7 @@ static void policy_grab_uplink_skb(const struct sk_buff *skb,
     }
     grab = (dpi_grab_data_t *)buf->buf;
     grab->position = info->policy.position;
-    grab->timestamp = info->latest_time;
+    grab->timestamp = curtime();//time(NULL);
     memcpy(grab->intra_mac, ethh->h_source, sizeof(grab->intra_mac));
     if (htons(ETH_P_8021Q) == ethh->h_proto 
         || htons(ETH_P_8021AD) == ethh->h_proto)
@@ -606,9 +635,13 @@ static void policy_grab_uplink_skb(const struct sk_buff *skb,
             struct tcphdr *tcph = (struct tcphdr *)((int8 *)iph + (iph->ihl * 4));
             grab->tcp.outer_port = ntohs(tcph->dest);
             grab->tcp.tcp_dlen = ntohs(iph->tot_len) - (iph->ihl * 4) - (tcph->doff * 4);
-            grab->tcp.grab_dlen = (DPI_GRABED_BUFF_DATA_MAX_SIZE > grab->tcp.tcp_dlen) ? grab->tcp.tcp_dlen : DPI_GRABED_BUFF_DATA_MAX_SIZE;
+            real_grab_dlen = (DPI_GRABED_BUFF_DATA_MAX_SIZE > grab->tcp.tcp_dlen) ? grab->tcp.tcp_dlen : DPI_GRABED_BUFF_DATA_MAX_SIZE;
+            /*四字节对齐*/
+            grab->tcp.grab_dlen = ALIGN_4_BYTES(real_grab_dlen);
             grab->tcp.reserved = 0;
-            memcpy((void *)(grab+1), ((int8 *)tcph + (tcph->doff * 4)), grab->tcp.grab_dlen);
+            memcpy((void *)(grab+1), ((int8 *)tcph + (tcph->doff * 4)), real_grab_dlen);
+            for (i=real_grab_dlen; i<grab->tcp.grab_dlen; ++i)
+                ((int8 *)(grab+1))[i] = '\0';
             buf->len = sizeof(*grab) + grab->tcp.grab_dlen;
             break;
         }
@@ -618,17 +651,25 @@ static void policy_grab_uplink_skb(const struct sk_buff *skb,
             uint16 ulen = ntohs(udph->len);
             grab->udp.outer_port = ntohs(udph->dest);
             grab->udp.udp_dlen = ulen - sizeof(*udph);
-            grab->udp.grab_dlen = (DPI_GRABED_BUFF_DATA_MAX_SIZE > grab->udp.udp_dlen) ? grab->udp.udp_dlen : DPI_GRABED_BUFF_DATA_MAX_SIZE;
+            real_grab_dlen = (DPI_GRABED_BUFF_DATA_MAX_SIZE > grab->udp.udp_dlen) ? grab->udp.udp_dlen : DPI_GRABED_BUFF_DATA_MAX_SIZE;
+            /*四字节对齐*/
+            grab->udp.grab_dlen = ALIGN_4_BYTES(real_grab_dlen);
             grab->udp.reserved = 0;
-            memcpy((void *)(grab+1), udph+1, grab->udp.grab_dlen);
+            memcpy((void *)(grab+1), udph+1, real_grab_dlen);
+            for (i=real_grab_dlen; i<grab->udp.grab_dlen; ++i)
+                ((int8 *)(grab+1))[i] = '\0';
             buf->len = sizeof(*grab) + grab->udp.grab_dlen;
             break;
         }
         case DPI_L4_PROTO_OTHER:
         {
             grab->ip.ip_dlen = ntohs(iph->tot_len) - (iph->ihl * 4);
-            grab->ip.grab_dlen = (DPI_GRABED_BUFF_DATA_MAX_SIZE > grab->ip.ip_dlen) ? grab->ip.ip_dlen : DPI_GRABED_BUFF_DATA_MAX_SIZE;
-            memcpy((void *)(grab+1), ((int8 *)iph + (iph->ihl * 4)), grab->ip.grab_dlen);
+            real_grab_dlen = (DPI_GRABED_BUFF_DATA_MAX_SIZE > grab->ip.ip_dlen) ? grab->ip.ip_dlen : DPI_GRABED_BUFF_DATA_MAX_SIZE;
+            /*四字节对齐*/
+            grab->ip.grab_dlen = ALIGN_4_BYTES(real_grab_dlen);
+            memcpy((void *)(grab+1), ((int8 *)iph + (iph->ihl * 4)), real_grab_dlen);
+            for (i=real_grab_dlen; i<grab->ip.grab_dlen; ++i)
+                ((int8 *)(grab+1))[i] = '\0';
             buf->len = sizeof(*grab) + grab->ip.grab_dlen;
             break;
         }
@@ -644,7 +685,9 @@ static void policy_grab_uplink_skb(const struct sk_buff *skb,
     /*if TRUE delete policy*/
     if (info->grabed_count >= info->policy.maxcnt 
         || (info->latest_time - info->start_time) >= info->policy.maxsecs)
+    {
         policy_info_del(info->head, info);
+    }
 }
 
 static BOOL policy_l2_match_uplink_skb(const struct sk_buff *skb,
@@ -687,7 +730,7 @@ static BOOL policy_l3_match_uplink_skb(const struct sk_buff *skb,
         }
         else
         {
-            if ((info->policy.outer_ip & info->policy.outer_mask) == (iph->daddr & info->policy.outer_mask))
+            if ((info->policy.outer_ip & info->policy.outer_mask) == (ntohl(iph->daddr) & info->policy.outer_mask))
                 return TRUE;
             else
                 return FALSE;
@@ -695,7 +738,7 @@ static BOOL policy_l3_match_uplink_skb(const struct sk_buff *skb,
     }
     else
     {
-        if ((info->policy.intra_ip & info->policy.intra_mask) == (iph->saddr & info->policy.intra_mask))
+        if ((info->policy.intra_ip & info->policy.intra_mask) == (ntohl(iph->saddr) & info->policy.intra_mask))
         {
             if (0 == info->policy.outer_ip || 0 == info->policy.outer_mask) /*all outer ip*/
             {
@@ -703,7 +746,7 @@ static BOOL policy_l3_match_uplink_skb(const struct sk_buff *skb,
             }
             else
             {
-                if ((info->policy.outer_ip & info->policy.outer_mask) == (iph->daddr & info->policy.outer_mask))
+                if ((info->policy.outer_ip & info->policy.outer_mask) == (ntohl(iph->daddr) & info->policy.outer_mask))
                     return TRUE;
                 else
                     return FALSE;
@@ -794,7 +837,7 @@ static void policy_grab_downlink_skb(const struct sk_buff *skb,
     }
     grab = (dpi_grab_data_t *)buf->buf;
     grab->position = info->policy.position;
-    grab->timestamp = info->latest_time;
+    grab->timestamp = curtime();//time(NULL);
     memcpy(grab->intra_mac, ethh->h_dest, sizeof(grab->intra_mac));
     if (htons(ETH_P_8021Q) == ethh->h_proto 
         || htons(ETH_P_8021AD) == ethh->h_proto)
@@ -849,7 +892,9 @@ static void policy_grab_downlink_skb(const struct sk_buff *skb,
     /*if TRUE delete policy*/
     if (info->grabed_count >= info->policy.maxcnt 
         || (info->latest_time - info->start_time) >= info->policy.maxsecs)
+    {
         policy_info_del(info->head, info);
+    }
 }
 
 static BOOL policy_l2_match_downlink_skb(const struct sk_buff *skb,
@@ -884,7 +929,7 @@ static BOOL policy_l3_match_downlink_skb(const struct sk_buff *skb,
         }
         else
         {
-            if ((info->policy.outer_ip & info->policy.outer_mask) == (iph->saddr & info->policy.outer_mask))
+            if ((info->policy.outer_ip & info->policy.outer_mask) == (ntohl(iph->saddr) & info->policy.outer_mask))
                 return TRUE;
             else
                 return FALSE;
@@ -892,7 +937,7 @@ static BOOL policy_l3_match_downlink_skb(const struct sk_buff *skb,
     }
     else
     {
-        if ((info->policy.intra_ip & info->policy.intra_mask) == (iph->daddr & info->policy.intra_mask))
+        if ((info->policy.intra_ip & info->policy.intra_mask) == (ntohl(iph->daddr) & info->policy.intra_mask))
         {
             if (0 == info->policy.outer_ip || 0 == info->policy.outer_mask) /*all outer ip*/
             {
@@ -900,7 +945,7 @@ static BOOL policy_l3_match_downlink_skb(const struct sk_buff *skb,
             }
             else
             {
-                if ((info->policy.outer_ip & info->policy.outer_mask) == (iph->saddr & info->policy.outer_mask))
+                if ((info->policy.outer_ip & info->policy.outer_mask) == (ntohl(iph->saddr) & info->policy.outer_mask))
                     return TRUE;
                 else
                     return FALSE;
@@ -989,7 +1034,7 @@ static void dpi_policy_hook_func(struct sk_buff *skb,
                                  void *data)
 {
     policy_info_head_t *head = (policy_info_head_t *)data;
-    policy_info_t *info;
+    policy_info_t *info, *info_next;
     const struct ethhdr *ethh = eth_hdr(skb);
     const struct iphdr *iph;
 
@@ -1016,9 +1061,12 @@ static void dpi_policy_hook_func(struct sk_buff *skb,
     }
     /*匹配规则抓取数据*/
     rwlock_rdlock(&head->lock);
-    list_for_each_entry(info, &head->head, list)
+    /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+    list_for_each_entry_safe(info, info_next, &head->head, list)
     {
-        policy_info_get(info);
+        info = policy_info_get(info);
+        if (NULL == info)
+            continue;
         rwlock_rdunlock(&head->lock);
         if (DPI_DIRECTION_UPLINK == dpi_policy_position_to_direction(head->position))
         {
@@ -1138,8 +1186,8 @@ static ssize_t dpi_policy_proc_read(struct file *file,
                         info->grabed_count, info->lose_count,
                         info->policy.maxcnt, info->policy.maxsecs,
                         dpi_position_to_str(info->policy.position), MAC2STR(info->policy.intra_mac),
-                        IP2STR(info->policy.intra_ip), IP2STR(info->policy.intra_mask),
-                        IP2STR(info->policy.outer_ip), IP2STR(info->policy.outer_mask),
+                        IP2STR(htonl(info->policy.intra_ip)), IP2STR(htonl(info->policy.intra_mask)),
+                        IP2STR(htonl(info->policy.outer_ip)), IP2STR(htonl(info->policy.outer_mask)),
                         dpi_l4_proto_to_str(info->policy.l4_proto), info->policy.port.outer_port);
         if (unlikely((len + copyed) > size))
             break;
@@ -1163,7 +1211,7 @@ static int32 dpi_policy_proc_open(struct inode *inode,
     rwlock_rdlock_bh(&info_head->lock);
     list_for_each_entry(info, &info_head->head, list)
     {
-        atomic_inc(&info->refcnt);
+        policy_info_get(info);
     }
     rwlock_rdunlock_bh(&info_head->lock);
     file->private_data = (void *)proc_data;
@@ -1180,6 +1228,7 @@ static int32 dpi_policy_proc_close(struct inode *inode,
     {
         policy_info_del_bh(proc_data->info_head, info);
     }
+    free(proc_data);
     file->private_data = NULL;
     return 0;
 }
@@ -1408,11 +1457,15 @@ static ssize_t dpi_read(struct file *file,
         if ((size-copyed) < bsize)
             break;
         tmp = grab_buff_dequeue();
-        if (NULL == tmp)
+        /* 可能会丢失掉一份已经抓取到的数据 */
+        if (NULL == tmp || (size-copyed) < tmp->len)
+        {
+            grab_buff_free_bh(tmp);
             break;
+        }
         copy_to_user(buf+copyed, tmp->buf+tmp->offset, tmp->len);
         copyed += tmp->len;
-        grab_buff_free(tmp);
+        grab_buff_free_bh(tmp);
     }
     return copyed;
 }
@@ -1457,6 +1510,47 @@ static struct miscdevice s_dpi_misc_device = {
     .fops   = &s_dpi_fops,
 };
 
+static int32 dpi_burned_check_kthd_func(void *data)
+{
+    policy_info_head_t *head;
+    policy_info_t *info, *info_next;
+    uint32 i;
+    BOOL should_sleep = TRUE;
+    uint64 now;
+    while (!kthread_should_stop())
+    {
+        should_sleep = TRUE;
+        now = curtime();
+        for (i=0; i<ARRAY_SIZE(s_policy_info_heads); ++i)
+        {
+            head = &s_policy_info_heads[i];
+            rwlock_rdlock_bh(&head->lock);
+            /*为了保证指针的安全,此处必须使用list_for_each_entry_safe*/
+            list_for_each_entry_safe(info, info_next, &head->head, list)
+            {
+                info = policy_info_get(info);
+                if (NULL == info)
+                    continue;
+                rwlock_rdunlock_bh(&head->lock);
+                if ((now - info->start_time) >= info->policy.maxsecs)
+                {
+                    policy_info_del_bh(head, info);
+                    should_sleep = FALSE;
+                }
+                policy_info_put_bh(info);
+                rwlock_rdlock_bh(&head->lock);
+            }
+            rwlock_rdunlock_bh(&head->lock);
+        }
+        
+        if (TRUE == should_sleep)
+            msleep_interruptible(10*1000);
+    }
+    return 0;
+}
+
+static struct task_struct *sp_kthd_dpi = NULL;
+
 static int32 __init dpi_module_init(void)
 {
     int32 ret;
@@ -1481,12 +1575,25 @@ static int32 __init dpi_module_init(void)
         misc_deregister(&s_dpi_misc_device);
         return -EIO;
     }
+    sp_kthd_dpi = kthread_run(dpi_burned_check_kthd_func, NULL, "kthd-dpi");
+    if (unlikely(IS_ERR(sp_kthd_dpi)))
+    {
+        ret = PTR_ERR(sp_kthd_dpi);
+        DB_ERR("kthread_run() call fail. errno[%d].", ret);
+        sp_kthd_dpi = NULL;
+        dpi_proc_destroy();
+        dpi_base_destroy();
+        misc_deregister(&s_dpi_misc_device);
+        return -EIO;
+    }
     DB_INF("DPI Module init successfully.");
     return 0;
 }
 
 static void __exit dpi_module_exit(void)
 {
+    if (NULL != sp_kthd_dpi)
+        kthread_stop(sp_kthd_dpi);
     dpi_proc_destroy();
     dpi_base_destroy();
     misc_deregister(&s_dpi_misc_device);

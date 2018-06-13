@@ -3,7 +3,7 @@
 
 START=54
 KVER=`uname -r`
-KO=dpi.ko
+KO=dpi-m.ko
 start() {
 	insmod /lib/modules/${KVER}/${KO}
 }

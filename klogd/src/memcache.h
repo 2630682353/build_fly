@@ -4,8 +4,13 @@
 #ifdef  __cplusplus
 extern "C" {
 #endif
-
+#ifdef LINUX_APP
 #include "list.h"
+#elif defined(LINUX_KERNEL)
+#include <linux/list.h>
+#else
+#error "Please define macro 'LINUX_APP' or 'LINUX_KERNEL'."
+#endif
 #include "type.h"
 
 typedef struct memcache_slab_st{
@@ -16,6 +21,7 @@ typedef struct memcache_slab_st{
 typedef struct memcache_st{
     struct list_head slabs;
     struct list_head fslabs;
+    uint32 nslabs;
     uint32 fnslabs;
     uint32 bsize;
 }memcache_t;

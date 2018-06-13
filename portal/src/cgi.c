@@ -13,6 +13,7 @@
 #include "connection.h"
 #include "libcom.h"
 #include <sys/stat.h>
+#include <fcntl.h>
 
 enum {
 
@@ -199,6 +200,7 @@ int cgi_sys_query_handler(connection_t *con)
 	char *pc_os[4] = {"mac", "hpwos", "windows", "ie"};
 
 	user_query_info_t user;
+	memset(&user, 0, sizeof(user_query_info_t));
 	if (user_agent) {
 		strncpy(user.user_agent, user_agent, sizeof(user.user_agent) - 1);
 		strlower(user_agent);
@@ -224,8 +226,6 @@ int cgi_sys_query_handler(connection_t *con)
 			"AppleWebKit/537.36 (KHTML, like Gecko) "
 			"Chrome/60.0.3112.101 Safari/537.36");
 	}
-
-	memset(&user, 0, sizeof(user_query_info_t));
 	
 	if (!mac || !user_ip || !vlan) {
 		con->html_path = "portal/error.html";

@@ -20,4 +20,4 @@ typedef struct util_timer_st {
 extern void timer_handler();
 extern util_timer *add_timer(int (*cb_func)(),int delay, int loop, int interval, void *para, int type);
 extern int del_timer(int type);
-extern int timer_list_init(int timeslot, void (*sig_handler)(int sig));
+extern int timer_list_init();

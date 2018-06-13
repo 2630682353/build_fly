@@ -21,6 +21,7 @@ typedef struct memcache_slab_st{
 typedef struct memcache_st{
     struct list_head slabs;
     struct list_head fslabs;
+    uint32 nslabs;
     uint32 fnslabs;
     uint32 bsize;
 }memcache_t;

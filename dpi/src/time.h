@@ -9,7 +9,7 @@ extern "C" {
 #include <linux/time.h>
 #include <linux/rtc.h>
 #ifndef curtime
-#define curtime()       (get_seconds()-sys_tz.tz_minuteswest * 60)
+#define curtime()       get_seconds()
 #endif
 
 #define TIME_MAX        (uint64)(-1)

@@ -992,7 +992,10 @@ void black_white_list_add_send()
 		uuci_get_free(array, num);
 	}
 	if (!uuci_get("acct_config.white_list.white", &array, &num)) {
+		char cmd[128] = {0};
 		for(i = 0; i < num; i++) {
+			snprintf(cmd, sizeof(cmd) - 1, "ipset add authlist %s", array[i]);
+			system(cmd);
 			str2mac(array[i], black_white_mac);
 			if (msg_send_syn( MSG_CMD_AS_WHITELIST_ADD, black_white_mac, sizeof(black_white_mac), NULL, NULL) != 0) {
 			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_WhiteLIST_ADD err\n ");
@@ -1188,6 +1191,13 @@ int portal_url_set()
 			GATEWAY_LOG(LOG_INFO, "MSG_CMD_AS_PORTAL_URL_SET V5 success \n");
 		}
 	} 
+	char cmd[512] = {0};
+	snprintf(cmd, sizeof(cmd) - 1, 
+		"ipset create authlist hash:mac;"
+		"iptables -t nat -A prerouting_rule -p tcp --dport 443 -j REDIRECT --to-ports 443;"
+		"iptables -t nat -I prerouting_rule -m set --match-set authlist src -j RETURN");
+
+	system(cmd);	
 	return 0;
 
 }
@@ -1223,6 +1233,16 @@ int gateway_sig_init()
 
 }
 
+int iptables_final()
+{
+	char cmd[512] = {0};
+	snprintf(cmd, sizeof(cmd) - 1, 
+		"iptables -t nat -D prerouting_rule -p tcp --dport 443 -j REDIRECT --to-ports 443;"
+		"iptables -t nat -D prerouting_rule -m set --match-set authlist src -j RETURN;"
+		"ipset destroy authlist");
+	system(cmd);
+}
+
 int main (int argc, char **argv)
 {
 	
@@ -1251,6 +1271,7 @@ int main (int argc, char **argv)
 	struct timeval tv;
 	fd_set fds;
 	int max_fd = 0;
+	timer_list_init();
 	add_timer(send_heart_beat, 2, 1, heart_beat_interval, NULL, 0);
 	add_timer(query_list_clear, 2, 1, queryuser_cache_time, NULL, 0);
 	portal_url_set();
@@ -1258,7 +1279,7 @@ int main (int argc, char **argv)
 	dpi_policy_send();
 	add_advertise();
 	while (1) {
-		tv.tv_sec = 1;
+		tv.tv_sec = 60;
 		tv.tv_usec = 0;
 		FD_ZERO(&fds);
 		FD_SET(pipefd[0], &fds);
@@ -1280,6 +1301,7 @@ int main (int argc, char **argv)
 					case SIGINT:
 						msg_final(); 
 						curl_global_cleanup();
+						iptables_final();
 						exit(0);
 						break;
 					}

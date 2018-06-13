@@ -1,13 +1,12 @@
 #include "memcache.h"
-#include <strings.h>
-#include <stdlib.h>
+#include "def.h"
 
-#define MEMCACHE_DEFAULT_MAX_FNSLABS    (64)
 #define MEMCACHE_FNSLABS_INCREMENT      (4)
+#define MEMCACHE_FNSLABS_MAXCOUNT       (16)
 
 static memcache_slab_t *_memcache_slab_alloc(memcache_t *cache)
 {
-    memcache_slab_t *slab = (memcache_slab_t *)malloc(sizeof(*slab) + cache->bsize);
+    memcache_slab_t *slab = (memcache_slab_t *)malloc(ALIGN_4_BYTES(sizeof(*slab) + cache->bsize));
     slab->buf = (void *)(slab+1);
     return slab;
 }
@@ -22,12 +21,13 @@ memcache_t *memcache_create(const uint32 bsize,
 {
     memcache_t *cache = NULL;
     memcache_slab_t *slab = NULL;
-    uint32 fnslabs = (nslabs > MEMCACHE_DEFAULT_MAX_FNSLABS) ? MEMCACHE_DEFAULT_MAX_FNSLABS : nslabs;
+    uint32 fnslabs = nslabs > MEMCACHE_FNSLABS_MAXCOUNT ? MEMCACHE_FNSLABS_MAXCOUNT : nslabs;
     if (bsize <= 0)
         return NULL;
     cache = (memcache_t *)malloc(sizeof(*cache));
     cache->bsize = bsize;
     cache->fnslabs = 0;
+    cache->nslabs = 0;
     INIT_LIST_HEAD(&cache->slabs);
     INIT_LIST_HEAD(&cache->fslabs);
     while (cache->fnslabs < fnslabs)
@@ -49,12 +49,14 @@ void memcache_destroy(memcache_t *cache)
             slab = list_first_entry(&cache->slabs, memcache_slab_t, list);
             list_del(&slab->list);
             _memcache_slab_free(slab);
+            --cache->nslabs;
         }
         while (!list_empty(&cache->fslabs))
         {
             slab = list_first_entry(&cache->fslabs, memcache_slab_t, list);
             list_del(&slab->list);
             _memcache_slab_free(slab);
+            --cache->fnslabs;
         }
         free(cache);
     }
@@ -78,6 +80,7 @@ void *memcache_alloc(memcache_t *cache)
     list_del(&slab->list);
     list_add_tail(&slab->list, &cache->slabs);
     --cache->fnslabs;
+    ++cache->nslabs;
     return slab->buf;
 }
 
@@ -88,7 +91,8 @@ void memcache_free(memcache_t *cache,
     {
         memcache_slab_t *slab = container_of((void *)(((long)buf)-sizeof(void *)), memcache_slab_t, buf);
         list_del(&slab->list);
-        if (cache->fnslabs < MEMCACHE_DEFAULT_MAX_FNSLABS)
+        --cache->nslabs;
+        if (cache->fnslabs < MEMCACHE_FNSLABS_MAXCOUNT)
         {
             list_add_tail(&slab->list, &cache->fslabs);
             ++cache->fnslabs;

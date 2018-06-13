@@ -317,7 +317,7 @@ int32 authenticated_add(authenticated_t *auth)
                 "hwaddr["MACSTR"],ipaddr["IPSTR"],"
                 "acct-status[%s],acct-policy[%s],"
                 "total-seconds[%llu],total-flows[%llu].",
-                MAC2STR(auth->mac), IP2STR(auth->ipaddr), 
+                MAC2STR(auth->mac), IP2STR(htonl(auth->ipaddr)), 
                 acct_status_to_str(auth->acct.status), acct_policy_to_str(auth->acct.policy), 
                 auth->acct.valid_time, auth->acct.valid_flow);
         return -1;
@@ -327,7 +327,7 @@ int32 authenticated_add(authenticated_t *auth)
             "hwaddr["MACSTR"],ipaddr["IPSTR"],"
             "acct-status[%s],acct-policy[%s],"
             "total-seconds[%llu],total-flows[%llu].",
-            MAC2STR(auth->mac), IP2STR(auth->ipaddr), 
+            MAC2STR(auth->mac), IP2STR(htonl(auth->ipaddr)), 
             acct_status_to_str(auth->acct.status), acct_policy_to_str(auth->acct.policy), 
             auth->acct.valid_time, auth->acct.valid_flow);
     return 0;
@@ -343,7 +343,7 @@ void authenticated_del_by_mac(const void *mac)
     if (NULL != auth && atomic_dec_and_test(&auth->refcnt))
     {
         LOGGING_INFO("Successful remove the user from the authenticated user list. hwaddr["MACSTR"],ipaddr["IPSTR"].", 
-                MAC2STR(auth->mac), IP2STR(auth->ipaddr));
+                MAC2STR(auth->mac), IP2STR(htonl(auth->ipaddr)));
         hashtab_delete(sp_htab_auth, auth->mac);
     }
     rwlock_wrunlock_bh(&s_rwlock_htab_auth);
@@ -353,12 +353,12 @@ void authenticated_del(authenticated_t *auth)
 {
     if (unlikely(NULL == auth))
         return;
-    if (likely(atomic_read(&auth->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&auth->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&auth->refcnt)))
+    else
         return;
     LOGGING_INFO("Successful remove the user from the authenticated user list. hwaddr["MACSTR"],ipaddr["IPSTR"].", 
-            MAC2STR(auth->mac), IP2STR(auth->ipaddr));
+            MAC2STR(auth->mac), IP2STR(htonl(auth->ipaddr)));
     config_authenticated_timeout(auth->mac); /*通知应用层删除指定认证通过的用户*/
     rwlock_wrlock(&s_rwlock_htab_auth);
     hashtab_delete(sp_htab_auth, auth->mac);
@@ -367,9 +367,13 @@ void authenticated_del(authenticated_t *auth)
 
 authenticated_t *authenticated_get(authenticated_t *auth)
 {
-    if (likely(NULL != auth))
+    if (likely(NULL != auth && atomic_read(&auth->refcnt) > 0))
+    {
         atomic_inc(&auth->refcnt);
-    return auth;
+        return auth;
+    }
+    else
+        return NULL;
 }
 
 void authenticated_put(authenticated_t *auth)
@@ -381,12 +385,12 @@ static void authenticated_del_bh(authenticated_t *auth)
 {
     if (unlikely(NULL == auth))
         return;
-    if (likely(atomic_read(&auth->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&auth->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&auth->refcnt)))
+    else
         return;
     LOGGING_INFO("Successful remove the user from the authenticated user list. hwaddr["MACSTR"],ipaddr["IPSTR"].", 
-            MAC2STR(auth->mac), IP2STR(auth->ipaddr));
+            MAC2STR(auth->mac), IP2STR(htonl(auth->ipaddr)));
     config_authenticated_timeout_bh(auth->mac); /*通知应用层删除指定认证通过的用户*/
     rwlock_wrlock_bh(&s_rwlock_htab_auth);
     hashtab_delete(sp_htab_auth, auth->mac);
@@ -405,8 +409,10 @@ authenticated_t *authenticated_search(const void *mac)
         return NULL;
     rwlock_rdlock(&s_rwlock_htab_auth);
     auth = (authenticated_t *)hashtab_search(sp_htab_auth, mac);
-    if (NULL != auth)
+    if (NULL != auth && atomic_read(&auth->refcnt) > 0)
         atomic_inc(&auth->refcnt);
+    else
+        auth = NULL;
     rwlock_rdunlock(&s_rwlock_htab_auth);
     return auth;
 }
@@ -717,7 +723,7 @@ static ssize_t authenticated_proc_read(struct file *file,
             "  %llu  %llu"
             "  %llu  %llu"
             "  %llu  %llu\n", 
-            MAC2STR(auth->mac), IP2STR(auth->ipaddr), auth->time.start, auth->time.latest,
+            MAC2STR(auth->mac), IP2STR(htonl(auth->ipaddr)), auth->time.start, auth->time.latest,
             acct_status_to_str(auth->acct.status), acct_policy_to_str(auth->acct.policy), 
             auth->acct.valid_time, auth->acct.valid_flow,
             auth->stats.uplink_pkts, auth->stats.downlink_pkts, 
@@ -725,23 +731,6 @@ static ssize_t authenticated_proc_read(struct file *file,
             auth->stats.uplink_dropped, auth->stats.downlink_dropped,
             auth->ads_push.latest_time, auth->ads_push.latest_flow,
             auth->ads_embed.latest_time, auth->ads_embed.latest_flow);
-        /*    
-        len = sprintf(tmp, MACSTR"  "IPSTR"  %llu  %llu"
-            "  %s  %s"
-            "  "TIMESTR"  %llu"
-            "  %llu  %llu"
-            "  %llu  %llu"
-            "  %llu  %llu"
-            "  %llu  %llu"
-            "  %llu  %llu\n", 
-            MAC2STR(auth->mac), IP2STR(auth->ipaddr), auth->time.start, auth->time.latest,
-            acct_status_to_str(auth->acct.status), acct_policy_to_str(auth->acct.policy), 
-            TIME2STR(auth->acct.valid_time), auth->acct.valid_flow,
-            auth->stats.uplink_pkts, auth->stats.downlink_pkts, 
-            auth->stats.uplink_bytes, auth->stats.downlink_bytes, 
-            auth->stats.uplink_dropped, auth->stats.downlink_dropped,
-            auth->ads_push.latest_time, auth->ads_push.latest_flow,
-            auth->ads_embed.latest_time, auth->ads_embed.latest_flow);*/
         spinlock_unlock_bh(&auth->lock);
         if (unlikely((len + copyed) > size))
             break;

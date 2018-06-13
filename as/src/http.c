@@ -281,7 +281,7 @@ static int32 http_redirect(struct sk_buff *skb,
     if (NULL == nskb)
     {
         DB_ERR("http_skb_alloc() call fail.");
-        /*(LOGGING_ERR("Portal redirect fail for skb-alloc. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
+        /*LOGGING_ERR("Portal redirect fail for skb-alloc. hwaddr["MACSTR"],ipaddr["IPSTR"],url[%s].", 
                 MAC2STR(eth_hdr(skb)->h_source), IP2STR(http_iphdr(skb)->saddr), http_url);*/
         return -1;
     }

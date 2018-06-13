@@ -2,7 +2,7 @@ PROJ = dpid
 CC := @gcc
 RM := @rm -f
 
-CFLAGS := -Wall -g -DLINUX_APP -DDEBUG
+CFLAGS := -Wall -g  -rdynamic -DLINUX_APP -DDEBUG 
 
 INC_DIR := -I.
 LIBS := -lpthread -lcurl -ljson-c -l:libz.a -lshare -lipc -luci

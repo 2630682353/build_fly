@@ -1,4 +1,6 @@
 #!/bin/sh /etc/rc.common
+START=99
+
 l3dev=eth0.2
 
 qos_init(){
@@ -85,7 +87,10 @@ setup_eachip_qos()
 
 start()
 {
-	qos_init
 	config_load bandwidth
-	config_foreach setup_eachip_qos client_ip
+	config_get enable qos_base enable
+	if [ $enable == '1' ]; then
+		qos_init
+		config_foreach setup_eachip_qos client_ip
+	fi
 }

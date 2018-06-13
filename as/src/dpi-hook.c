@@ -74,13 +74,11 @@ EXPORT_SYMBOL(dpi_register_hook);
 
 void dpi_unregister_hook(dpi_hook_ops_t *ops)
 {
-    if (unlikely(TRUE != s_dpi_inited))
+    if (unlikely(TRUE != s_dpi_inited || NULL == ops))
         return;
-    if (unlikely(NULL == ops))
-        return;
-    if (likely(atomic_read(&ops->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&ops->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&ops->refcnt)))
+    else
         return;
     rwlock_wrlock_bh(&s_rwlock_dpi_hooks);
     list_del(&ops->list);
@@ -125,7 +123,10 @@ void dpi_hook(struct sk_buff *skb,
         return;
     rwlock_rdlock(&s_rwlock_dpi_hooks);
     list_for_each_entry(elem, &s_dpi_hooks[hooknum][direction], list)
-        elem->hook(skb, elem->data);
+    {
+        if (atomic_read(&elem->refcnt) > 0)
+            elem->hook(skb, elem->data);
+    }
     rwlock_rdunlock(&s_rwlock_dpi_hooks);
 }
 
@@ -203,7 +204,10 @@ static int32 dpi_hook_proc_open(struct inode *inode,
             if (list_empty(&s_dpi_hooks[index_hooknum][index_direction]))
                 continue;
             list_for_each_entry(elem, &s_dpi_hooks[index_hooknum][index_direction], list)
-                atomic_inc(&elem->refcnt);
+            {
+                if (atomic_read(&elem->refcnt) > 0)
+                    atomic_inc(&elem->refcnt);
+            }
         }
     }
     rwlock_rdunlock_bh(&s_rwlock_dpi_hooks);

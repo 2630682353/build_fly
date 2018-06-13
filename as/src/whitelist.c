@@ -194,9 +194,9 @@ void whitelist_del(whitelist_t *white)
 {
     if (unlikely(NULL == white))
         return;
-    if (likely(atomic_read(&white->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&white->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&white->refcnt)))
+    else
         return;
     LOGGING_INFO("Successful remove the user from the whitelist. hwaddr["MACSTR"].", MAC2STR(white->mac));
     rwlock_wrlock(&s_rwlock_whitelist);
@@ -206,9 +206,13 @@ void whitelist_del(whitelist_t *white)
 
 whitelist_t *whitelist_get(whitelist_t *white)
 {
-    if (NULL != white)
+    if (likely(NULL != white && atomic_read(&white->refcnt) > 0))
+    {
         atomic_inc(&white->refcnt);
-    return white;
+        return white;
+    }
+    else
+        return NULL;
 }
 
 void whitelist_put(whitelist_t *white)
@@ -220,9 +224,9 @@ static void whitelist_del_bh(whitelist_t *white)
 {
     if (unlikely(NULL == white))
         return;
-    if (likely(atomic_read(&white->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&white->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&white->refcnt)))
+    else
         return;
     LOGGING_INFO("Successful remove the user from the whitelist. hwaddr["MACSTR"].", MAC2STR(white->mac));
     rwlock_wrlock_bh(&s_rwlock_whitelist);
@@ -242,8 +246,10 @@ whitelist_t *whitelist_search(const void *mac)
         return NULL;
     rwlock_rdlock(&s_rwlock_whitelist);
     white = (whitelist_t *)hashtab_search(sp_htab_whitelist, mac);
-    if (NULL != white)
+    if (NULL != white && atomic_read(&white->refcnt) > 0)
         atomic_inc(&white->refcnt);
+    else
+        white = NULL;
     rwlock_rdunlock(&s_rwlock_whitelist);
     return white;
 }

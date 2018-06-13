@@ -10,7 +10,7 @@ config gateway_base gateway_base
 	option token_url        http://192.168.1.160:2080/authentication/platform/token/2/
 	option user_query_url	http://192.168.1.160:2080/authentication/gateway/user/2/
 	option user_register_url  http://192.168.1.160:2080/authentication/gateway/user/register/2/
-	option text_code_url    http://192.168.1.5:2080/authentication/getAuthcode
+	option text_code_url    http://192.168.1.160:2080/authentication/getAuthcode
 	option text_str			"您的服务码是：%06d【华数WIFI】"
 
 config gateway_sys  gateway_sys

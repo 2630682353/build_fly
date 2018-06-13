@@ -323,6 +323,9 @@ int32 auth_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 					free(auth_ok_u);
 			goto error;
 		}
+		char ipset_cmd[256] = {0};
+		snprintf(ipset_cmd, sizeof(ipset_cmd), "ipset add authlist %s", u->mac);
+		system(ipset_cmd);
 		strncpy(auth_ok_u->acct_session, session_id, sizeof(auth_ok_u->acct_session) - 1);
 		pthread_mutex_lock(&auth_mutex);
 		list_add(&auth_ok_u->list, &auth_ok_list);
@@ -360,11 +363,16 @@ int32 user_timeout(const int32 cmd, void *ibuf, int32 ilen, void *obuf, int32 *o
 	auth_ok_user_t *n;
 	int matched = 0;
 	AAA_LOG(LOG_INFO,"have recv timeout mac:%d\n", ilen);
+	char ipset_cmd[128] = {0};
 	pthread_mutex_lock(&auth_mutex);
 	list_for_each_entry_safe(p, n, &auth_ok_list, list) {
 		if (memcmp(p->ucfg.mac, ibuf, sizeof(p->ucfg.mac)) == 0) {
 			list_del(&p->list);
 			matched = 1;
+			snprintf(ipset_cmd, sizeof(ipset_cmd), "ipset del authlist %s;"
+				"conntrack -D conntrack -s %s -p tcp --dport 443 > /dev/null 2>&1", 
+				p->user_info.mac, p->user_info.user_ip);
+			system(ipset_cmd);
 //			free(p);
 			break;
 		}

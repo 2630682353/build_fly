@@ -5,24 +5,43 @@
 extern "C" {
 #endif
 
-#define URL_HTTP_HDR    "http://"
-#define URL_HTTPS_HDR   "https://"
-
 #define URL_SIZE                (256)
 #define IFNAME_SIZE             (16)
 #define HWADDR_SIZE             (6)
 #define IPADDR_SIZE             (16)
 
-#define SEC2MSEC                (1000)
-#define MSEC2USEC               (1000)
-#define SEC2USEC                (1000 * 1000)
-#define BYTE_TO_MBYTE           (1024 * 1024)
-
 #define MACSTR          "%02x:%02x:%02x:%02x:%02x:%02x"
 #define MAC2STR(mac)    ((uint8 *)(mac))[0],((uint8 *)(mac))[1],((uint8 *)(mac))[2],((uint8 *)(mac))[3],((uint8 *)(mac))[4],((uint8 *)(mac))[5]
 
-#define IPSTR      "%u.%u.%u.%u"
-#define IP2STR(ip) ((uint8 *)(&ip))[0]&0xFF, ((uint8 *)(&ip))[1]&0xFF, ((uint8 *)(&ip))[2]&0xFF, ((uint8 *)(&ip))[3]&0xFF
+#define IPSTR       "%s"
+#ifdef LINUX_APP
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#elif defined(LINUX_KERNEL)
+#include "type.h"
+#include <linux/kernel.h>
+#include <linux/in.h>
+static inline int8 *inet_ntoa(struct in_addr in)
+{
+    static int8 ipaddr_arr[64][16];
+    static uint64 s_count = 0;
+    uint64 index = s_count++ % 64;
+    int8 *ipaddr = ipaddr_arr[index];
+    uint8 *bytes = (uint8 *)&in;
+    int32 len;
+    len = sprintf(ipaddr, "%d.%d.%d.%d",bytes[0],bytes[1],bytes[2],bytes[3]);
+    ipaddr[len] = '\0';
+    return ipaddr;
+}
+#else
+#error "Please define macro 'LINUX_APP' or 'LINUX_KERNEL'."
+#endif
+static inline int8 *IP2STR(uint32 ipaddr)
+{
+    return inet_ntoa(*(struct in_addr *)&ipaddr);
+}
+
 #ifdef LINUX_APP
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -66,6 +85,14 @@ extern "C" {
 		const typeof(((type *) NULL)->member) *__mptr = (ptr);	\
 		(type *) ((char *) __mptr - offsetof(type, member));	\
 	})
+#endif
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x)   (sizeof(x) / sizeof((x)[0]))
+#endif
+
+#ifndef ALIGN_4_BYTES
+#define ALIGN_4_BYTES(s)    ((((s) + 3) / 4) * 4)
 #endif
 
 /*

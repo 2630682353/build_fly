@@ -267,7 +267,6 @@ int32 msg_send_syn(
 		if (!temp_sock)
 			goto out;
 		len = sock_sendmsg_unix(temp_sock, snd_msg, sizeof(msg_t), sbuf, slen, addr);
-		
 
 	} else {
 		int temp_sn = 0;

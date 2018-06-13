@@ -1,7 +1,7 @@
 config acct acct_config
 	option	acct_policy		3
 	option	acct_status		1
-	option	total_seconds		86400 #86400 #24h
+	option	total_seconds		86400 #24h
 	option	total_flows		107374182400 #100GB
 
 config total total_config

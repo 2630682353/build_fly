@@ -78,6 +78,7 @@ typedef struct dpi_grab_data_st{
     int32 position;
     uint64 timestamp;
     uint8 intra_mac[HWADDR_SIZE];
+    int8 reserves[2];
     uint32 intra_ip;
     uint32 outer_ip;
     int32 l4_proto;
@@ -112,16 +113,33 @@ enum {
 
     DPID_WORKER_MAXNUM      = 4
 };
+static inline int8 *dpid_worker_to_str(const int32 worker)
+{
+    switch (worker)
+    {
+    case DPID_WORKER_GATHER:
+        return "gather";
+    case DPID_WORKER_FORMAT:
+        return "format";
+    case DPID_WORKER_COMPRESS:
+        return "compress";
+    case DPID_WORKER_UPLOADING:
+        return "uploading";
+    default:
+        return NULL;
+    }
+}
+
 typedef struct {
     int32 worker;
-    pthread_t thdid;
     void *arg_in;
     void *arg_out;
     buffer_queue_t *queue_in;
     buffer_queue_t *queue_out;
-    thread_pool_t *tpool;
-}dpid_workder_t;
-static dpid_workder_t s_dpid_workers[DPID_WORKER_MAXNUM];
+    uint32 thdnum;
+    pthread_t *thdids;
+}dpid_worker_t;
+static dpid_worker_t s_dpid_workers[DPID_WORKER_MAXNUM];
 
 
 static void *dpid_gather_thread_func(void *arg)
@@ -133,12 +151,12 @@ static void *dpid_gather_thread_func(void *arg)
     int32 num;
     buffer_t *rbuf;
     uint32 rlen;
-    dpid_workder_t *worker = (dpid_workder_t *)arg;
+    dpid_worker_t *worker = (dpid_worker_t *)arg;
     int8 *path = (int8 *)worker->arg_in;
-    DB_INF("worker->worker[%d],worker->thdid[%d],worker->arg_in[%s],worker->arg_out[%s],"
-        "worker->queue_in[%p],worker->queue_out[%p],worker->tpool[%p].",
-        worker->worker, worker->thdid, worker->arg_in, worker->arg_out,
-        worker->queue_in, worker->queue_out, worker->tpool);
+    DB_INF("worker->worker[%s],worker->arg_in[%s],worker->arg_out[%s],"
+        "worker->queue_in[%p],worker->queue_out[%p],worker->thdnum[%u].",
+        dpid_worker_to_str(worker->worker), (int8 *)worker->arg_in, (int8 *)worker->arg_out,
+        worker->queue_in, worker->queue_out, worker->thdnum);
     fd = open(path, O_RDONLY);
     if (fd < 0)
     {
@@ -205,6 +223,7 @@ static int32 bin_to_hex(const int8 *bin,
 static struct json_object *grab_data_to_json(const dpi_grab_data_t *grab)
 {
     int8 tmp[512];
+    int32 len;
     struct tm *tm;
     struct json_object *jobj;
     struct json_object *jobj2;
@@ -221,34 +240,34 @@ static struct json_object *grab_data_to_json(const dpi_grab_data_t *grab)
         goto err;
     json_object_object_add(jobj, "position", jobj2);
     /*timstamp*/
-    bzero(tmp, sizeof(tmp));
-    tm = gmtime((const time_t *)&grab->timestamp);
-    snprintf(tmp, sizeof(tmp), "%04d-%02d-%02d %02d:%02d:%02d", 
+	tm = localtime((const time_t *)&grab->timestamp);
+    len = snprintf(tmp, sizeof(tmp)-1, "%04d-%02d-%02d %02d:%02d:%02d", 
             tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, 
             tm->tm_hour, tm->tm_min, tm->tm_sec);
+    tmp[len] = '\0';
     jobj2 = json_object_new_string(tmp);
     if (NULL == jobj2)
         goto err;
     json_object_object_add(jobj, "timestamp", jobj2);
     /*intra_mac*/
-    bzero(tmp, sizeof(tmp));
-    snprintf(tmp, sizeof(tmp), MACSTR, MAC2STR(grab->intra_mac));
+    len = snprintf(tmp, sizeof(tmp)-1, MACSTR, MAC2STR(grab->intra_mac));
+    tmp[len] = '\0';
     jobj2 = json_object_new_string(tmp);
     if (NULL == jobj2)
         goto err;
     json_object_object_add(jobj, "intraMac", jobj2);
     /*intra_ip*/
-    bzero(tmp, sizeof(tmp));
     ipaddr = htonl(grab->intra_ip);
-    snprintf(tmp, sizeof(tmp), IPSTR, IP2STR(ipaddr));
+    len = snprintf(tmp, sizeof(tmp)-1, IPSTR, IP2STR(ipaddr));
+    tmp[len] = '\0';
     jobj2 = json_object_new_string(tmp);
     if (NULL == jobj2)
         goto err;
     json_object_object_add(jobj, "intraIp", jobj2);
     /*outer_ip*/
-    bzero(tmp, sizeof(tmp));
     ipaddr = htonl(grab->outer_ip);
-    snprintf(tmp, sizeof(tmp), IPSTR, IP2STR(ipaddr));
+    len = snprintf(tmp, sizeof(tmp)-1, IPSTR, IP2STR(ipaddr));
+    tmp[len] = '\0';
     jobj2 = json_object_new_string(tmp);
     if (NULL == jobj2)
         goto err;
@@ -288,8 +307,12 @@ static struct json_object *grab_data_to_json(const dpi_grab_data_t *grab)
                 goto err;
             json_object_object_add(jobj3, "grabDlen", jobj4);
             /*tcp.grab_data*/
-            bzero(tmp, sizeof(tmp));
-            bin_to_hex((int8 *)(grab+1), grab->tcp.grab_dlen, tmp);
+            if ((grab->tcp.grab_dlen * 2) >= sizeof(tmp))
+                len = ((sizeof(tmp) - 1) / 2) * 2;
+            else
+                len = grab->tcp.grab_dlen * 2;
+            bin_to_hex((int8 *)(grab+1), len/2, tmp);
+            tmp[len] = '\0';
             jobj4 = json_object_new_string(tmp);
             if (NULL == jobj4)
                 goto err;
@@ -304,7 +327,7 @@ static struct json_object *grab_data_to_json(const dpi_grab_data_t *grab)
                 goto err;
             json_object_object_add(jobj2, "udp", jobj3);
             /*udp.outer_port*/
-            jobj4 = json_object_new_int(grab->tcp.outer_port);
+            jobj4 = json_object_new_int(grab->udp.outer_port);
             if (NULL == jobj4)
                 goto err;
             json_object_object_add(jobj3, "outerPort", jobj4);
@@ -314,13 +337,17 @@ static struct json_object *grab_data_to_json(const dpi_grab_data_t *grab)
                 goto err;
             json_object_object_add(jobj3, "udpDlen", jobj4);
             /*udp.grab_dlen*/
-            jobj4 = json_object_new_int((int32)grab->tcp.grab_dlen);
+            jobj4 = json_object_new_int((int32)grab->udp.grab_dlen);
             if (NULL == jobj4)
                 goto err;
             json_object_object_add(jobj3, "grabDlen", jobj4);
             /*udp.grab_data*/
-            bzero(tmp, sizeof(tmp));
-            bin_to_hex((int8 *)(grab+1), grab->tcp.grab_dlen, tmp);
+            if ((grab->udp.grab_dlen * 2) >= sizeof(tmp))
+                len = ((sizeof(tmp) - 1) / 2) * 2;
+            else
+                len = grab->udp.grab_dlen * 2;
+            bin_to_hex((int8 *)(grab+1), len/2, tmp);
+            tmp[len] = '\0';
             jobj4 = json_object_new_string(tmp);
             if (NULL == jobj4)
                 goto err;
@@ -345,8 +372,12 @@ static struct json_object *grab_data_to_json(const dpi_grab_data_t *grab)
                 goto err;
             json_object_object_add(jobj3, "grabDlen", jobj4);
             /*ip.grab_data*/
-            bzero(tmp, sizeof(tmp));
-            bin_to_hex((int8 *)(grab+1), grab->tcp.grab_dlen, tmp);
+            if ((grab->ip.grab_dlen * 2) >= sizeof(tmp))
+                len = ((sizeof(tmp) - 1) / 2) * 2;
+            else
+                len = grab->ip.grab_dlen * 2;
+            bin_to_hex((int8 *)(grab+1), len/2, tmp);
+            tmp[len] = '\0';
             jobj4 = json_object_new_string(tmp);
             if (NULL == jobj4)
                 goto err;
@@ -418,8 +449,9 @@ static uint32 grab_data_fomat_to_json(buffer_t *ibuf,
         }
         json_object_array_add(jarray, jobj);
         is_jarray_empty = FALSE;
-        ibuf->offset += grab_size;
-        ibuf->len -= grab_size;
+        /*四字节对齐*/
+        ibuf->offset += ALIGN_4_BYTES(grab_size);
+        ibuf->len -= ALIGN_4_BYTES(grab_size);
     }
     if (FALSE == is_jarray_empty)
     {
@@ -439,11 +471,11 @@ static void *dpid_format_thread_func(void *arg)
     buffer_t *ibuf;
     buffer_t *obuf;
     uint32 osize;
-    dpid_workder_t *worker = (dpid_workder_t *)arg;
-    DB_INF("worker->worker[%d],worker->thdid[%d],worker->arg_in[%s],worker->arg_out[%s],"
-        "worker->queue_in[%p],worker->queue_out[%p],worker->tpool[%p].",
-        worker->worker, worker->thdid, worker->arg_in, worker->arg_out,
-        worker->queue_in, worker->queue_out, worker->tpool);
+    dpid_worker_t *worker = (dpid_worker_t *)arg;
+    DB_INF("worker->worker[%s],worker->arg_in[%s],worker->arg_out[%s],"
+        "worker->queue_in[%p],worker->queue_out[%p],worker->thdnum[%u].",
+        dpid_worker_to_str(worker->worker), (int8 *)worker->arg_in, (int8 *)worker->arg_out,
+        worker->queue_in, worker->queue_out, worker->thdnum);
     while (1)
     {
         ibuf = buffer_queue_dequeue(worker->queue_in);
@@ -516,21 +548,24 @@ static void *dpid_compress_thread_func(void *arg)
 {
     buffer_t *ibuf;
     buffer_t *obuf;
-    dpid_workder_t *worker = (dpid_workder_t *)arg;
-    DB_INF("worker->worker[%d],worker->thdid[%d],worker->arg_in[%s],worker->arg_out[%s],"
-        "worker->queue_in[%p],worker->queue_out[%p],worker->tpool[%p].",
-        worker->worker, worker->thdid, worker->arg_in, worker->arg_out,
-        worker->queue_in, worker->queue_out, worker->tpool);
+    dpid_worker_t *worker = (dpid_worker_t *)arg;
+    DB_INF("worker->worker[%s],worker->arg_in[%s],worker->arg_out[%s],"
+        "worker->queue_in[%p],worker->queue_out[%p],worker->thdnum[%u].",
+        dpid_worker_to_str(worker->worker), (int8 *)worker->arg_in, (int8 *)worker->arg_out,
+        worker->queue_in, worker->queue_out, worker->thdnum);
     while (1)
     {
         ibuf = buffer_queue_dequeue(worker->queue_in);
         if (NULL == ibuf)
             continue;
         obuf = buffer_queue_buffer_alloc(worker->queue_out);
-        if (0 != data_compress(ibuf, obuf))
-            buffer_queue_buffer_free(worker->queue_out, obuf);
-        else
-            buffer_queue_enqueue(worker->queue_out, obuf);
+        if (NULL != obuf)
+        {
+            if (0 != data_compress(ibuf, obuf))
+                buffer_queue_buffer_free(worker->queue_out, obuf);
+            else
+                buffer_queue_enqueue(worker->queue_out, obuf);
+        }
         buffer_queue_buffer_free(worker->queue_in, ibuf);
     }
     return arg;
@@ -596,12 +631,12 @@ out:
 static void *dpid_uploading_thread_func(void *arg)
 {
     buffer_t *buf;
-    dpid_workder_t *worker = (dpid_workder_t *)arg;
+    dpid_worker_t *worker = (dpid_worker_t *)arg;
     const int8 *url = (const int8 *)worker->arg_out;
-    DB_INF("worker->worker[%d],worker->thdid[%d],worker->arg_in[%s],worker->arg_out[%s],"
-        "worker->queue_in[%p],worker->queue_out[%p],worker->tpool[%p].",
-        worker->worker, worker->thdid, worker->arg_in, worker->arg_out,
-        worker->queue_in, worker->queue_out, worker->tpool);
+    DB_INF("worker->worker[%s],worker->arg_in[%s],worker->arg_out[%s],"
+        "worker->queue_in[%p],worker->queue_out[%p],worker->thdnum[%u].",
+        dpid_worker_to_str(worker->worker), (int8 *)worker->arg_in, (int8 *)worker->arg_out,
+        worker->queue_in, worker->queue_out, worker->thdnum);
     while (1)
     {
         buf = buffer_queue_dequeue(worker->queue_in);
@@ -623,42 +658,39 @@ static void usage(void)
 #define DPID_PIDFILE_PATH  "/tmp/dpid_pidfile"
 static int32 s_dpid_pidfile_fd = -1;
 
-static inline void dpid_workder_kill(dpid_workder_t *worker,
+static inline void dpid_workder_kill(dpid_worker_t *worker,
                                      int32 signum)
 {
-    if (pthread_equal(pthread_self(), worker->thdid))
+    uint32 i;
+    for (i = 0; i < worker->thdnum; ++i)
     {
-        if (NULL != worker->arg_in)
+        if (pthread_equal(pthread_self(), worker->thdids[i]))
         {
-            free(worker->arg_in);
-            worker->arg_in = NULL;
+            if (NULL != worker->arg_in)
+            {
+                free(worker->arg_in);
+                worker->arg_in = NULL;
+            }
+            if (NULL != worker->arg_out)
+            {
+                free(worker->arg_out);
+                worker->arg_out = NULL;
+            }
+            if (NULL != worker->queue_in)
+            {
+                buffer_queue_destroy(worker->queue_in);
+                worker->queue_in = NULL;
+            }
+            if (NULL != worker->queue_out)
+            {
+                buffer_queue_destroy(worker->queue_out);
+                worker->queue_out = NULL;
+            }
+            worker->thdids[i] = (pthread_t)-1;
         }
-        if (NULL != worker->arg_out)
-        {
-            free(worker->arg_out);
-            worker->arg_out = NULL;
-        }
-        if (NULL != worker->queue_in)
-        {
-            buffer_queue_destroy(worker->queue_in);
-            worker->queue_in = NULL;
-        }
-        if (NULL != worker->queue_out)
-        {
-            buffer_queue_destroy(worker->queue_out);
-            worker->queue_out = NULL;
-        }
-        if (NULL != worker->tpool)
-        {
-            thread_pool_destroy(worker->tpool);
-            worker->tpool = NULL;
-        }
-        bzero(worker, sizeof(*worker));
-        worker->thdid = (pthread_t)-1;
-        return;
+        else if ((pthread_t)-1 != worker->thdids[i])
+            pthread_kill(worker->thdids[i], signum);
     }
-    if ((pthread_t)-1 != worker->thdid)
-        pthread_kill(worker->thdid, signum);
 }
 
 #ifndef ARRAY_SIZE
@@ -714,16 +746,22 @@ typedef struct dpid_cfg_st{
     struct {
         int8 source[128];
         uint32 buffsize;
+        uint32 thdnum;
+        uint32 maxcache;
     }gather;
     struct {
         uint32 buffsize;
+        uint32 thdnum;
+        uint32 maxcache;
     }format;
     struct {
         uint32 buffsize;
+        uint32 thdnum;
+        uint32 maxcache;
     }compress;
     struct {
         int8 dest[128];
-        uint32 buffsize;
+        uint32 thdnum;
     }uploading;
 }dpid_cfg_t;
 
@@ -735,7 +773,11 @@ static dpid_cfg_t *dpid_cfg_load(void)
     cfg = (dpid_cfg_t *)malloc(sizeof(*cfg));
     if (NULL == cfg)
         return NULL;
+#define DEFAULT_MAXCACHE    (128)
+#define DEFAULT_BUFFSIZE    (32*1024)
+#define DEFAULT_THDNUM      (1)
     bzero(cfg, sizeof(*cfg));
+    /*gather*/
     if (!uuci_get("dpid.gather.source", &array, &num))
     {
         strncpy(cfg->gather.source, array[0], sizeof(cfg->gather.source)-1);
@@ -749,21 +791,66 @@ static dpid_cfg_t *dpid_cfg_load(void)
 		uuci_get_free(array, num);
 	}
     else
-        ASSERT(0);
+        cfg->gather.buffsize = DEFAULT_BUFFSIZE;
+    if (!uuci_get("dpid.gather.threadnumber", &array, &num))
+    {
+        cfg->gather.thdnum = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+    else
+        cfg->gather.thdnum = DEFAULT_THDNUM;
+    if (!uuci_get("dpid.gather.maxcache", &array, &num))
+    {
+        cfg->gather.maxcache = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+    else
+        cfg->gather.maxcache = DEFAULT_MAXCACHE;
+    /*format*/
     if (!uuci_get("dpid.format.buffsize", &array, &num))
     {
         cfg->format.buffsize = atoi(array[0]);
 		uuci_get_free(array, num);
 	}
     else
-        ASSERT(0);
+        cfg->format.buffsize = DEFAULT_BUFFSIZE;
+    if (!uuci_get("dpid.format.threadnumber", &array, &num))
+    {
+        cfg->format.thdnum = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+    else
+        cfg->format.thdnum = DEFAULT_THDNUM;
+    if (!uuci_get("dpid.format.maxcache", &array, &num))
+    {
+        cfg->format.maxcache = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+    else
+        cfg->format.maxcache = DEFAULT_MAXCACHE;
+    /*compress*/
     if (!uuci_get("dpid.compress.buffsize", &array, &num))
     {
         cfg->compress.buffsize = atoi(array[0]);
 		uuci_get_free(array, num);
 	}
     else
-        ASSERT(0);
+        cfg->compress.buffsize = DEFAULT_BUFFSIZE;
+    if (!uuci_get("dpid.compress.threadnumber", &array, &num))
+    {
+        cfg->compress.thdnum = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+    else
+        cfg->compress.thdnum = DEFAULT_THDNUM;
+    if (!uuci_get("dpid.compress.maxcache", &array, &num))
+    {
+        cfg->compress.maxcache = atoi(array[0]);
+		uuci_get_free(array, num);
+	}
+    else
+        cfg->compress.maxcache = DEFAULT_MAXCACHE;
+    /*uploading*/
     if (!uuci_get("dpid.uploading.dest", &array, &num))
     {
         strncpy(cfg->uploading.dest, array[0], sizeof(cfg->uploading.dest)-1);
@@ -771,17 +858,22 @@ static dpid_cfg_t *dpid_cfg_load(void)
 	}
     else
         ASSERT(0);
-    if (!uuci_get("dpid.uploading.buffsize", &array, &num))
+    if (!uuci_get("dpid.uploading.threadnumber", &array, &num))
     {
-        cfg->uploading.buffsize = atoi(array[0]);
+        cfg->uploading.thdnum = atoi(array[0]);
 		uuci_get_free(array, num);
 	}
     else
-        ASSERT(0);
-    PRINTF("gather: source[%s],buffsize[%u].\n", cfg->gather.source, cfg->gather.buffsize);
-    PRINTF("format: buffsize[%u].\n", cfg->format.buffsize);
-    PRINTF("compress: buffsize[%u].\n", cfg->compress.buffsize);
-    PRINTF("uploading: dest[%s],buffsize[%u].\n", cfg->uploading.dest, cfg->uploading.buffsize);
+        cfg->uploading.thdnum = DEFAULT_THDNUM;
+    
+    PRINTF("gather: source[%s],buffsize[%u],thdnum[%u],maxcache[%u].\n", 
+        cfg->gather.source, cfg->gather.buffsize, cfg->gather.thdnum, cfg->gather.maxcache);
+    PRINTF("format: buffsize[%u],thdnum[%u],maxcache[%u].\n", 
+        cfg->format.buffsize, cfg->format.thdnum, cfg->format.maxcache);
+    PRINTF("compress: buffsize[%u],thdnum[%u],maxcache[%u].\n", 
+        cfg->compress.buffsize, cfg->compress.thdnum, cfg->compress.maxcache);
+    PRINTF("uploading: dest[%s],thdnum[%u].\n", 
+        cfg->uploading.dest, cfg->uploading.thdnum);
     return cfg;
 }
 
@@ -792,7 +884,8 @@ int32 main(int32 argc, int8 **argv)
     int32 ret;
     dpid_cfg_t *cfg;
     buffer_queue_t *queue;
-    dpid_workder_t *worker;
+    dpid_worker_t *worker;
+    int32 i;
     struct flock lock;
 
     while ((ch = getopt(argc, argv, "fh")) != -1)
@@ -873,59 +966,85 @@ int32 main(int32 argc, int8 **argv)
     worker = &s_dpid_workers[DPID_WORKER_GATHER];
     worker->worker = DPID_WORKER_GATHER;
     worker->arg_in = strdup(cfg->gather.source);
-    queue = buffer_queue_create(cfg->gather.buffsize);
+    queue = buffer_queue_create(cfg->gather.buffsize, cfg->gather.maxcache);
     if (NULL == queue)
     {
         DB_ERR("buffer_queue_create() call fail for gather.");
         exit(1);
     }
     worker->queue_out = queue;
-    ret = pthread_create(&worker->thdid, NULL, dpid_gather_thread_func, worker);
-    if (0 != ret)
+    worker->thdnum = cfg->gather.thdnum;
+    worker->thdids = (pthread_t *)malloc(worker->thdnum * sizeof(pthread_t));
+    for (i = 0; i < worker->thdnum; ++i)
     {
-        DB_ERR("pthread_create() call fail for data gather.");
-        exit(1);
+        ret = pthread_create(&worker->thdids[i], NULL, dpid_gather_thread_func, worker);
+        if (0 != ret)
+        {
+            DB_ERR("pthread_create() call fail for data gather, index[%d].", i);
+            exit(1);
+        }
     }
     /*format*/
     worker = &s_dpid_workers[DPID_WORKER_FORMAT];
     worker->worker = DPID_WORKER_FORMAT;
     worker->queue_in = queue;
-    queue = buffer_queue_create(cfg->format.buffsize);
+    queue = buffer_queue_create(cfg->format.buffsize, cfg->format.maxcache);
     if (NULL == queue)
     {
         DB_ERR("buffer_queue_create() call fail for format.");
         exit(1);
     }
     worker->queue_out = queue;
-    ret = pthread_create(&worker->thdid, NULL, dpid_format_thread_func, worker);
-    if (0 != ret)
+    worker->thdnum = cfg->format.thdnum;
+    worker->thdids = (pthread_t *)malloc(worker->thdnum * sizeof(pthread_t));
+    for (i = 0; i < worker->thdnum; ++i)
     {
-        DB_ERR("pthread_create() call fail for data format.");
-        exit(1);
+        ret = pthread_create(&worker->thdids[i], NULL, dpid_format_thread_func, worker);
+        if (0 != ret)
+        {
+            DB_ERR("pthread_create() call fail for data format, index[%d].", i);
+            exit(1);
+        }
     }
     /*compress*/
     worker = &s_dpid_workers[DPID_WORKER_COMPRESS];
     worker->worker = DPID_WORKER_COMPRESS;
     worker->queue_in = queue;
-    queue = buffer_queue_create(cfg->compress.buffsize);
+    queue = buffer_queue_create(cfg->compress.buffsize, cfg->compress.maxcache);
     if (NULL == queue)
     {
         DB_ERR("buffer_queue_create() call fail for compress.");
         exit(1);
     }
     worker->queue_out = queue;
-    ret = pthread_create(&worker->thdid, NULL, dpid_compress_thread_func, worker);
-    if (0 != ret)
+    worker->thdnum = cfg->compress.thdnum;
+    worker->thdids = (pthread_t *)malloc(worker->thdnum * sizeof(pthread_t));
+    for (i = 0; i < worker->thdnum; ++i)
     {
-        DB_ERR("pthread_create() call fail for data compress.");
-        exit(1);
+        ret = pthread_create(&worker->thdids[i], NULL, dpid_compress_thread_func, worker);
+        if (0 != ret)
+        {
+            DB_ERR("pthread_create() call fail for data compress, index[%d].", i);
+            exit(1);
+        }
     }
     /*uploading*/
     worker = &s_dpid_workers[DPID_WORKER_UPLOADING];
     worker->worker = DPID_WORKER_UPLOADING;
     worker->arg_out = strdup(cfg->uploading.dest);
     worker->queue_in = queue;
-    worker->thdid = pthread_self();
+    worker->thdnum = cfg->uploading.thdnum;
+    worker->thdids = (pthread_t *)malloc(worker->thdnum * sizeof(pthread_t));
+    for (i = 0; i < worker->thdnum-1; ++i)/*此处必须-1,因为uploading的最后一个线程为主线程*/
+    {
+        ret = pthread_create(&worker->thdids[i], NULL, dpid_uploading_thread_func, worker);
+        if (0 != ret)
+        {
+            DB_ERR("pthread_create() call fail for data uploading, index[%d].", i);
+            exit(1);
+        }
+    }
+    worker->thdids[worker->thdnum-1] = pthread_self();
     dpid_uploading_thread_func(worker);
     return 0;
 }

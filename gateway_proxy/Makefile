@@ -38,7 +38,7 @@ define Package/gateway_proxy
 	SECTION:=net
 	CATEGORY:=Network
 	TITLE:=gateway_proxy -- prints a snarky message
-	DEPENDS+=+libipc +libcurl
+	DEPENDS+=+libipc +libcurl +ipset
 endef
 
 
@@ -86,6 +86,8 @@ define Package/gateway_proxy/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/log_level $(1)/bin/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/etc/config/gateway_config $(1)/etc/config/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/etc/config/dpi_config $(1)/etc/config/
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/gateway_proxy.init $(1)/etc/init.d/gateway_proxy
 endef
 
 

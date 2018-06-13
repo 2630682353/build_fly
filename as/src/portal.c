@@ -77,9 +77,9 @@ void portal_interface_del_bh(portal_interface_t *interface)
 {
     if (unlikely(NULL == interface))
         return;
-    if (likely(atomic_read(&interface->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&interface->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&interface->refcnt)))
+    else
         return;
     LOGGING_INFO("Delete portal '%s' from the interface '%s' successfully.", 
             interface->url, interface->ifname);
@@ -99,9 +99,9 @@ void portal_interface_del(portal_interface_t *interface)
 {
     if (unlikely(NULL == interface))
         return;
-    if (likely(atomic_read(&interface->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&interface->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&interface->refcnt)))
+    else
         return;
     LOGGING_INFO("Delete portal '%s' from the interface '%s' successfully.", 
             interface->url, interface->ifname);
@@ -119,9 +119,13 @@ void portal_interface_put(portal_interface_t *interface)
 
 portal_interface_t *portal_interface_get(portal_interface_t *interface)
 {
-    if (NULL != interface)
+    if (likely(NULL != interface && atomic_read(&interface->refcnt) > 0))
+    {
         atomic_inc(&interface->refcnt);
-    return interface;
+        return interface;
+    }
+    else
+        return NULL;
 }
 
 portal_interface_t *portal_interface_search(const int8 *ifname)
@@ -135,7 +139,7 @@ portal_interface_t *portal_interface_search(const int8 *ifname)
         if (0 == strcmp(interface->ifname, ifname))
             break;
     }
-    if (NULL != interface && &s_list_portal_interface != &interface->list)
+    if (NULL != interface && &s_list_portal_interface != &interface->list && atomic_read(&interface->refcnt) > 0)
         atomic_inc(&interface->refcnt);
     else
         interface = NULL;
@@ -260,9 +264,9 @@ void portal_vlan_del_bh(portal_vlan_t *vlan)
 {
     if (unlikely(NULL == vlan))
         return;
-    if (likely(atomic_read(&vlan->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&vlan->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&vlan->refcnt)))
+    else
         return;
     LOGGING_INFO("Delete portal '%s' from the vlan '%u' successfully.", vlan->url, vlan->vlan_id);
     rwlock_wrlock_bh(&s_rwlock_list_portal_vlan);
@@ -279,9 +283,13 @@ void portal_vlan_put_bh(portal_vlan_t *vlan)
 
 portal_vlan_t *portal_vlan_get(portal_vlan_t *vlan)
 {
-    if (NULL != vlan)
+    if (likely(NULL != vlan && atomic_read(&vlan->refcnt) > 0))
+    {
         atomic_inc(&vlan->refcnt);
-    return vlan;
+        return vlan;
+    }
+    else
+        return NULL;
 }
 
 portal_vlan_t *portal_vlan_search(const uint16 vlan_id)
@@ -295,7 +303,7 @@ portal_vlan_t *portal_vlan_search(const uint16 vlan_id)
         if (vlan_id == vlan->vlan_id)
             break;
     }
-    if (NULL != vlan && &s_list_portal_vlan != &vlan->list)
+    if (NULL != vlan && &s_list_portal_vlan != &vlan->list && atomic_read(&vlan->refcnt) > 0)
         atomic_inc(&vlan->refcnt);
     else
         vlan = NULL;
@@ -307,9 +315,9 @@ void portal_vlan_del(portal_vlan_t *vlan)
 {
     if (unlikely(NULL == vlan))
         return;
-    if (likely(atomic_read(&vlan->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&vlan->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&vlan->refcnt)))
+    else
         return;
     LOGGING_INFO("Delete portal '%s' from the vlan '%u' successfully.", vlan->url, vlan->vlan_id);
     rwlock_wrlock(&s_rwlock_list_portal_vlan);

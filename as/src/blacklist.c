@@ -193,9 +193,9 @@ void blacklist_del(blacklist_t *black)
 {
     if (unlikely(NULL == black))
         return;
-    if (likely(atomic_read(&black->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&black->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&black->refcnt)))
+    else
         return;
     LOGGING_INFO("Successful remove the user from the blacklist. hwaddr["MACSTR"].", MAC2STR(black->mac));
     rwlock_wrlock(&s_rwlock_blacklist);
@@ -205,9 +205,13 @@ void blacklist_del(blacklist_t *black)
 
 blacklist_t *blacklist_get(blacklist_t *black)
 {
-    if (NULL != black)
+    if (likely(NULL != black && atomic_read(&black->refcnt) > 0))
+    {
         atomic_inc(&black->refcnt);
-    return black;
+        return black;
+    }
+    else
+        return NULL;
 }
 
 void blacklist_put(blacklist_t *black)
@@ -219,9 +223,9 @@ static void blacklist_del_bh(blacklist_t *black)
 {
     if (unlikely(NULL == black))
         return;
-    if (likely(atomic_read(&black->refcnt) == 1))
+    if (unlikely(atomic_dec_and_test(&black->refcnt)))
         smp_rmb();
-    else if (likely(!atomic_dec_and_test(&black->refcnt)))
+    else
         return;
     LOGGING_INFO("Successful remove the user from the blacklist. hwaddr["MACSTR"].", MAC2STR(black->mac));
     rwlock_wrlock_bh(&s_rwlock_blacklist);
@@ -241,8 +245,10 @@ blacklist_t *blacklist_search(const void *mac)
         return NULL;
     rwlock_rdlock(&s_rwlock_blacklist);
     black = (blacklist_t *)hashtab_search(sp_htab_blacklist, mac);
-    if (NULL != black)
+    if (NULL != black && atomic_read(&black->refcnt) > 0)
         atomic_inc(&black->refcnt);
+    else
+        black = NULL;
     rwlock_rdunlock(&s_rwlock_blacklist);
     return black;
 }

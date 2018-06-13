@@ -269,8 +269,8 @@ static int32 config_authenticated_add(const int32 cmd,
         return ERR_CODE_PARAMETER;
     }
     cfg = (authenticated_cfg_t *)ibuf;
-    DB_PARAM("hwaddr["MACSTR"],acct_status[%s],acct_policy[%s],total_seconds[%llu],total_flows[%llu].",
-        MAC2STR(cfg->mac), acct_status_to_str(cfg->acct_status), acct_policy_to_str(cfg->acct_policy), 
+    DB_PARAM("hwaddr["MACSTR"],ipaddr["IPSTR"],acct_status[%s],acct_policy[%s],total_seconds[%llu],total_flows[%llu].",
+        MAC2STR(cfg->mac), IP2STR(htonl(cfg->ipaddr)), acct_status_to_str(cfg->acct_status), acct_policy_to_str(cfg->acct_policy), 
         cfg->total_seconds, cfg->total_flows);
     bzero(&auth, sizeof(auth));
     memcpy(auth.mac, cfg->mac, sizeof(auth.mac));
@@ -546,8 +546,8 @@ int32 config_init(void)
         ret = PTR_ERR(sp_kthd_cfg);
         DB_ERR("kthread_create() call fail. errno[%d].", ret);
         sp_kthd_cfg = NULL;
-    }
         goto out;
+    }
     ret = 0;
 out:
     if (0 != ret)

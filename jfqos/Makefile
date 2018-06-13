@@ -75,7 +75,8 @@ endef
 define Package/jfqos/install
 	$(INSTALL_DIR) $(1)/lib/network
 	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/file/qos.sh $(1)/lib/network/
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/file/qos.sh $(1)/etc/init.d/
 	$(CP)	$(PKG_BUILD_DIR)/file/bandwidth $(1)/etc/config/
 endef
 
