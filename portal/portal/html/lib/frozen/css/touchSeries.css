@@ -1,6 +1,0 @@
-@charset "UTF-8";
-
-.moveTransition{
-    transition:300ms ease-out;
-    -webkit-transition:300ms ease-out;
-}
