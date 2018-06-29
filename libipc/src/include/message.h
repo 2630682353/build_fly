@@ -22,6 +22,8 @@ enum module_mid {
 	MODULE_WS,              /*WEB SERVICE MODULE*/
 	MODULE_RADIUS,          /*RADIUS-CLIENT MODULE*/
 	MODULE_AS,              /*ACCESS-SERVICE MODULE*/
+	MODULE_VIDEO_CACHE,
+	MODULE_VC,
 	MODULE_MAX              /*must be end*/
 };
 
@@ -70,6 +72,14 @@ enum msg_cmd_en {
     MSG_CMD_AS_PORTAL_ADD               = MSG_CMD_AS_START + 14,/*app --> kernel*/
     MSG_CMD_AS_PORTAL_DELETE            = MSG_CMD_AS_START + 15,/*app --> kernel*/
     MSG_CMD_AS_END                      = MSG_CMD_AS_START + 16,
+
+	MSG_CMD_VIDEO_CACHE_START           = DEFINE_CMD(MODULE_VIDEO_CACHE, USER_MODULE, 1),
+	MSG_CMD_VIDEO_CACHE_URL             = MSG_CMD_VIDEO_CACHE_START + 1,
+
+	MSG_CMD_VC_START                    = DEFINE_CMD(MODULE_VC, KERNEL_MODULE, 1),
+	MSG_CMD_VC_POLICY                   = MSG_CMD_VC_START + 1,
+	MSG_CMD_VC_REDIRECT					= MSG_CMD_VC_START + 2,
+	
 };
 
 
@@ -118,6 +128,7 @@ extern int32 msg_cmd_register(const int32 cmd, msg_cmd_handle_cb cb);
 extern int32 msg_cmd_unregister(const int32 cmd);
 extern int32 msg_send_syn(int32 cmd, void *sbuf, int32 slen, void **rbuf, int32 *rlen);
 extern int32 free_rcv_buf(void *rcv_buf);
+extern int32 msg_send_no_reply(int32 cmd, void *sbuf, int32 slen);
 
 #ifdef  __cplusplus
 }

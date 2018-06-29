@@ -472,9 +472,12 @@ int32 send_tel_code_handler(const int32 cmd, void *ibuf, int32 ilen, void *obuf,
 	obj = cJSON_Parse(back_str);
 
 	cJSON *code = cJSON_GetObjectItem(obj, "code");
-	if (!code || code->valueint)
+	if (!code)
 		goto out;
-	ret = 0;
+	if (code->valueint) {
+		ret = code->valueint;
+		goto out;
+	}
 	*olen = 0;
 	user_query_info_t *need_verify = malloc(sizeof(user_query_info_t));
 	memcpy(need_verify, user_info, sizeof(user_query_info_t));
@@ -1152,7 +1155,7 @@ int portal_url_set()
 	portal.apply = 1;
 	portal.vlan_id = 1;
 	snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.lan_ip);
-	
+	msg_send_syn(MSG_CMD_AS_PORTAL_DELETE, &portal, sizeof(portal), NULL, 0);
 	if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
 		GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_PORTAL_URL_SET err\n ");
 	}else {
@@ -1162,7 +1165,7 @@ int portal_url_set()
 		portal.apply = 1;
 		portal.vlan_id = 3;
 		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v3_ip);
-		
+		msg_send_syn(MSG_CMD_AS_PORTAL_DELETE, &portal, sizeof(portal), NULL, 0);
 		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
 			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_PORTAL_URL_SET err\n ");
 		}else {
@@ -1173,7 +1176,7 @@ int portal_url_set()
 		portal.apply = 1;
 		portal.vlan_id = 4;
 		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v4_ip);
-		
+		msg_send_syn(MSG_CMD_AS_PORTAL_DELETE, &portal, sizeof(portal), NULL, 0);
 		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
 			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_PORTAL_URL_SET err\n ");
 		}else {
@@ -1184,7 +1187,7 @@ int portal_url_set()
 		portal.apply = 1;
 		portal.vlan_id = 5;
 		snprintf(portal.url, sizeof(portal.url) - 1, "http://%s/cgi-bin/portal_cgi?opt=query", gateway.v5_ip);
-		
+		msg_send_syn(MSG_CMD_AS_PORTAL_DELETE, &portal, sizeof(portal), NULL, 0);
 		if (msg_send_syn( MSG_CMD_AS_PORTAL_ADD, &portal, sizeof(portal), NULL, 0) != 0) {
 			GATEWAY_LOG(LOG_ERR, "MSG_CMD_AS_PORTAL_URL_SET err\n ");
 		}else {

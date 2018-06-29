@@ -228,6 +228,50 @@ struct netlink_kernel_cfg umsg_cfg = {
 		
 };
 
+int msg_send_no_reply(int32 cmd, void *sbuf, int slen)
+{
+	struct sk_buff *nl_skb = NULL;
+    struct nlmsghdr *nlh = NULL;
+	msg_t *msg = NULL;
+    int ret = -1, len = 0, grp = 0;
+	msg_t *snd_msg = NULL;
+	int msg_len = 0;
+	
+	msg_len = sizeof(msg_t) + slen;
+	if (msg_len > MSG_LEN)
+		goto out;
+    /* 创建sk_buff 空间 */
+    nl_skb = nlmsg_new(msg_len, GFP_ATOMIC);
+    if(!nl_skb) {
+        printk("netlink alloc failure\n");
+        goto out;
+    }
+
+    /* 设置netlink消息头部 */
+    nlh = nlmsg_put(nl_skb, 0, 0, NLMSG_DONE, msg_len, 0);
+    if(nlh == NULL) {
+        printk("nlmsg_put failaure \n");
+        goto out;
+    }
+
+    /* 拷贝数据发送 */
+	msg = nlmsg_data(nlh);
+	msg->cmd = cmd;
+	msg->dlen = slen;
+	msg->result = 0;
+	msg->flag = 2;
+    memcpy(nlmsg_data(nlh) + sizeof(msg_t), sbuf, slen);
+	grp = MODULE_GET(cmd);
+
+	len = nlmsg_multicast(event_sock, nl_skb, 0, grp, MSG_DONTWAIT);
+
+out:
+	if (nl_skb) 
+		nlmsg_free(nl_skb);
+	return ret;
+}
+
+
 int msg_send_syn(int32 cmd, void *sbuf, int slen, void **obuf, int *olen)
 {
 	struct sk_buff *nl_skb = NULL;
@@ -390,7 +434,7 @@ EXPORT_SYMBOL(msg_send_syn);
 EXPORT_SYMBOL(msg_cmd_register);
 EXPORT_SYMBOL(msg_cmd_unregister);
 EXPORT_SYMBOL(free_rcv_buf);
-
+EXPORT_SYMBOL(msg_send_no_reply);
 
 module_init(test_netlink_init);
 module_exit(test_netlink_exit);

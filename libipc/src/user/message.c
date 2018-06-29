@@ -143,7 +143,7 @@ int32 msg_init(const int16 module_id  /*本模块的模块ID*/
 	
 	int grp = (1 << (module_id - 1));
 	sp_nlk_rcv_sock = netlink_sock_init(NETLINK_EVENT, grp, 0);
-	sp_nlk_snd_sock = netlink_sock_init(NETLINK_EVENT, grp, 0);
+//	sp_nlk_snd_sock = netlink_sock_init(NETLINK_UMSG, grp, 0);
 
 	pthread_create(&pt_snd, NULL, (void *)msg_snd_thread_cb, NULL);
 	pthread_create(&pt_rcv, NULL, (void *)msg_rcv_thread_cb, NULL);
@@ -161,33 +161,37 @@ void msg_final(void)
     /*4. 销毁发包线程*/
     /*5. 销毁发包socket*/
     /*6. 销毁收/发包队列*/
-
+	printf("in msgfinal\n");
 	pthread_mutex_destroy(&sn_mutex);
 	pthread_cancel(pt_rcv);
 	pthread_join(pt_rcv, NULL);
 	sock_delete(sp_rcv_sock);
 	sock_delete(sp_nlk_rcv_sock);
+	printf("thread pool before\n");
 	thread_pool_destroy(sp_handle_pool);
+	printf("thread pool after\n");
 	pthread_cancel(pt_snd);
 	pthread_join(pt_snd, NULL);
+	printf("sock delete before\n");
 	sock_delete(sp_snd_sock);
-	sock_delete(sp_nlk_snd_sock);
-
+//	sock_delete(sp_nlk_snd_sock);
+	printf("sock delete after\n");
 	queue_item_t *item = NULL;
 	msg_pkt_t *pkt = NULL;
 	queue_destroy(sp_rcv_queue);
+	printf("rcvqueue before\n");
     while (FALSE == queue_empty(sp_rcv_queue))
     {
         item = queue_dequeue(sp_rcv_queue);
 		pkt = (msg_pkt_t *)(item->arg);
 		mem_free(pkt->in.buf);
 		mem_free(pkt->out.buf);
-        free(item->arg);
-        free(item);
+        mem_free(item->arg);
+        mem_free(item);
     }
 	pthread_mutex_destroy(&sp_rcv_queue->mutex);
 	free(sp_rcv_queue);
-	
+	printf("snd queue before\n");
 	queue_destroy(sp_snd_queue);
     while (FALSE == queue_empty(sp_snd_queue))
     {
@@ -195,11 +199,12 @@ void msg_final(void)
 		pkt = (msg_pkt_t *)(item->arg);
 		mem_free(pkt->in.buf);
 		mem_free(pkt->out.buf);
-        free(item->arg);
-        free(item);
+        mem_free(item->arg);
+        mem_free(item);
     }
 	pthread_mutex_destroy(&sp_snd_queue->mutex);
 	free(sp_snd_queue);
+	printf("sndqueue after\n");
 	memory_pool_destroy(mempool_buf);
 	memory_pool_destroy(mempool_queue_item);
 	memory_pool_destroy(mempool_pkt);
@@ -368,7 +373,7 @@ static void msg_handle(queue_item_t *item)
 		snd_msg->cmd = recv_msg->cmd;
 		pkt->out.len = pkt->out.offset + sizeof(msg_t) + olen;
 	}
-	
+
 	if (pkt->in.offset == sizeof(struct nlmsghdr)) {
 		
 		struct nlmsghdr *nlh = (struct nlmsghdr *)pkt->out.buf;
@@ -430,10 +435,18 @@ static void *msg_snd_thread_cb(void *arg)
 		queue_item_t *item = queue_dequeue(sp_snd_queue);
 		pthread_mutex_unlock(&(sp_snd_queue->mutex));
 		msg_pkt_t *snd_pkt = (msg_pkt_t*)(item->arg);
+		msg_t *recv_msg = (msg_t*)(snd_pkt->in.buf + snd_pkt->in.offset);
+		if (recv_msg->flag == 2) {
+			mem_free(snd_pkt->in.buf);
+			mem_free(snd_pkt->out.buf);
+			mem_free(item->arg);
+			mem_free(item);
+			continue;
+		}
 		
 //		DB_INF("server before sock_sendto: %d", snd_pkt->out.len);
 		if (snd_pkt->out.offset == sizeof(struct nlmsghdr)) {
-			sock_sendto(sp_nlk_snd_sock, snd_pkt->out.buf, snd_pkt->out.len, &snd_pkt->paddr);
+			sock_sendto(sp_nlk_rcv_sock, snd_pkt->out.buf, snd_pkt->out.len, &snd_pkt->paddr);
 			DB_INF("netlink server have send");
 		}
 		else {

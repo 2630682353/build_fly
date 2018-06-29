@@ -323,12 +323,10 @@ int cgi_sys_text_code_handler(connection_t *con)
 	}
 		
 	strncpy(user.username, name, sizeof(user.username) - 1);
+	int code = -1;
+	code = cgi_snd_msg(MSG_CMD_MANAGE_TEXT_SEND, &user, sizeof(user), NULL, NULL);
+	cJSON_AddNumberToObject(con->response, "code", code);
 	
-	if (cgi_snd_msg(MSG_CMD_MANAGE_TEXT_SEND, &user, sizeof(user), NULL, NULL) == 0) {
-		cJSON_AddNumberToObject(con->response, "code", 0);
-	} else {
-		cJSON_AddNumberToObject(con->response, "code", 1);
-	}
 out:
 	return 1;
 }
