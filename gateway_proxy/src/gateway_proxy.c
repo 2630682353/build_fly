@@ -573,7 +573,7 @@ void sig_hander( int sig )
 {  
 	int save_errno = errno;
 	int msg = sig;
-	send(pipefd[1], (char *)&msg, 1, 0);
+	send(pipefd[1], &msg, 4, 0);
 	errno = save_errno;
 } 
 
@@ -1295,7 +1295,7 @@ int main (int argc, char **argv)
 		}
 
 		if (FD_ISSET(pipefd[0], &fds)) {
-			char signals[100];
+			int signals[100];
 			ret = recv(pipefd[0], signals, sizelen(signals), 0);
 			if (ret > 0) {
 				for(i = 0; i < ret; i++) {
